@@ -1,0 +1,6715 @@
+# 谷粒商城
+
+
+
+
+
+## 一、入门
+
+### 1. linux 设置开机启动
+
+```shell
+systemctl enable docker
+```
+
+### 2. mysql docker 安装脚本
+
+```shell
+docker run --name mysql_1 -p 3301:3306 \
+-v /Volumes/extend/docker_public_file_mapping/guli_shop/mysql_1/log:/var/log/mysql \
+-v /Volumes/extend/docker_public_file_mapping/guli_shop/mysql_1/data:/var/lib/mysql \
+-v /Volumes/extend/docker_public_file_mapping/guli_shop/mysql_1/conf:/etc/mysql \
+-e MYSQL_ROOT_PASSWORD=123456 -d mysql:5.7
+```
+
+我所执行的
+
+（1）先配置`my.cnf`，并放到与`DockerFile`同级目录下
+
+```shell
+[client]
+default-character-set=utf8
+
+[mysql]
+default-character-set=utf8
+
+[mysqld]
+init_connect='SET collation_connection = utf8_unicode_ci'
+init_connect='SET NAMES utf8'
+character-set-server=utf8
+collation-server=utf8_unicode_ci
+skip-character-set-client-handshake
+skip-name-resolve
+```
+
+（2）创建`dockerFile`
+
+```dockerfile
+FROM mysql:5.7
+MAINTAINER luo<1007052116@qq.com>
+
+# 把 java与tomcat添加到容器中（ADD命令自带解压功能）
+
+COPY my.cnf /etc/mysql
+
+# 修改 my.cnf 的权限，如果全局可写，mysql将会忽略这个文件中的配置
+RUN ["/bin/bash","-c","chmod 744 /etc/mysql/my.cnf"]
+```
+
+（3）构建，运行镜像
+
+```shell
+# 通过dockerFile构建镜像
+luo@localhost docker_shell % docker build -f ./DockerFile -t mysql_customized ./
+# 运行构建好的镜像，在mac上运行，第二次启动的时候，容器mysql没有对物理机上数据库文件操作的权限，所以在mac上测试时，没有映射 /var/lib/mysql 到物理机上
+luo@localhost docker_shell % docker run --name mysql_1 -p 3301:3306 \
+-v /Volumes/extend/docker_public_file_mapping/guli_shop/mysql_1/log:/var/log/mysql \
+-v /Volumes/extend/docker_public_file_mapping/guli_shop/mysql_1/data:/var/lib/mysql \
+-v /Volumes/extend/docker_public_file_mapping/guli_shop/mysql_1/conf:/opt/mysql_conf \
+-e MYSQL_ROOT_PASSWORD=123456 -d mysql_customized
+
+# 设置在启动docker时自动启动 mysql
+docker update mysql_1 --restart=always
+```
+
+### 3. docker 安装 redis
+
+```shell
+# 需要先在物理机上创建 redis.conf 文件
+touch /Volumes/extend/docker_public_file_mapping/guli_shop/redis_1/conf/redis.conf
+
+# 启动容器，mac的redis容器只能安装在 aspf的磁盘上
+docker run -p 6379:6379 --name redis \
+-v /Volumes/extend/docker_public_file_mapping/guli_shop/redis_1/conf/redis.conf:/etc/redis/redis.conf \
+-v /Volumes/extend/docker_public_file_mapping/guli_shop/redis_1/data:/data \
+-d redis redis-server /etc/redis/redis.conf
+
+# 能用的版本
+docker run -p 6379:6379 --name redis \
+-v /Volumes/OS/environment/guli-shop/redis-1/conf/redis.conf:/etc/redis/redis.conf \
+-v /Volumes/OS/environment/guli-shop/redis-1/data:/data \
+-d redis redis-server /etc/redis/redis.conf
+```
+
+开启redis持久化，编辑`redis.conf`文件
+
+```shell
+# 启用redis AOF 数据持久化
+appendonly yes
+```
+
+### 4. 配置不添加到`git`版本控制的文件
+
+![Snip20200909_3](./images/Snip20200909_3.png)
+
+```shell
+
+luo@luodeMacBook-Pro gulimall % head .gitignore
+target/
+**/mvnw
+**/mvnw.cmd
+**/.mvn
+**/target/
+.idea
+**/.gitignore
+
+```
+
+### 5. Renren-generator
+
+（1）配置要生成代码的数据库`application.yml`
+
+```yaml
+# mysql
+spring:
+  datasource:
+    type: com.alibaba.druid.pool.DruidDataSource
+    #MySQL配置
+    driverClassName: com.mysql.cj.jdbc.Driver
+    # 配置要反向生成代码的数据库
+    url: jdbc:mysql://localhost:3301/mall_oms?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai
+    username: root
+    password: 123456
+```
+
+（2）配置包名、模块名`generator.yml`
+
+```properties
+#代码生成器，配置信息
+
+mainPath=com.guli
+#包名
+package=com.guli.shop
+moduleName=mall-oms
+#作者
+author=罗俊华
+#Email
+email=1007052116@qq.com
+#表前缀(类名不会包含表前缀)
+tablePrefix=oms_
+```
+
+（3）配置生成的文件名
+
+`io.renren.utils.GenUtils`
+
+```java
+public class GenUtils {
+      /**
+     * 获取文件名
+     */
+    public static String getFileName(String template, String className, String packageName, String moduleName) {
+    
+      
+        /** 我的改动
+         * 手动将 xxxDao 改为 xxxMapper
+         * */
+        if (template.contains("Dao.java.vm")) {
+            return packagePath + "mapper" + File.separator + className + "Mapper.java";
+        }
+    }
+}
+```
+
+（4）同时更改模版，从而达到更改生成的代码内容
+
+`template/Dao.java.vm`
+
+```java
+// 改 包名 .dao 为 .mapper
+package ${package}.${moduleName}.mapper;
+
+// 曾经是 ${className}Dao 现被改为 ${className}Mapper
+//@Mapper
+public interface ${className}Mapper extends BaseMapper<${className}Entity> {
+	
+}
+```
+
+`template/ServiceImpl.java.vm`
+
+```java
+//  // 更改 {className}Dao 为 {className}Mapper
+import ${package}.${moduleName}.mapper.${className}Mapper;
+import ${package}.${moduleName}.entity.${className}Entity;
+import ${package}.${moduleName}.service.${className}Service;
+
+@Service("${classname}Service")
+// 更改 {className}Dao 为 {className}Mapper
+public class ${className}ServiceImpl extends ServiceImpl<${className}Mapper, ${className}Entity> implements ${className}Service {
+
+}
+```
+
+`template/Dao.xml.vm`
+
+```xml
+<!--改Dao为mapper-->
+<mapper namespace="${package}.${moduleName}.mapper.${className}Mapper">
+```
+
+（6）不要忘记将Controller的`@RequestMapping`改为对应的`@GetMapping`或者`@PostMapping`
+
+### 6. Mac 复制时，多出文件
+
+mac复制文件到其他系统会有很多._开头的文件
+
+当从mac复制文件到其他系统的时候，会出现这样的牛皮癣，目录下面多了一堆._开头的同名文件，很让人恶心，找了资料，说这是【 “Apple Double” 的文件系統處理機制】，虽然可以被删除，但很麻烦。
+ 可以用命令行执行删除
+
+```shell
+find . -name "._*"|xargs rm
+
+find . | grep \\._ | xargs rm -r
+```
+
+如果文件夹中有空格，其实在查询的时候是会被加上“\”的，也就导致在删除 的时候这个反斜杠变成了转义符。需要手动删除文件夹中有空格到._文件
+
+### 7. vue模块化开发
+
+#### （1）全局安装`vue`脚手架	
+
+```shell
+npm install -g @vue/cli-init
+```
+
+#### （2）使用vue脚手架初始化项目
+
+```shell
+luo@luodeMacBook-Pro vue_cli % vue init webpack vue-guli-mall
+
+? Project name vue-guli-mall
+? Project description vue 脚手架开发的谷粒商城
+? Author luo <1007052116@qq.com>
+? Vue build standalone
+? Install vue-router? Yes
+? Use ESLint to lint your code? No
+? Set up unit tests No
+? Setup e2e tests with Nightwatch? No
+? Should we run `npm install` for you after the project has been created? (recommended) npm
+
+   vue-cli · Generated "vue-guli-mall".
+
+
+# Installing project dependencies ...
+```
+
+#### （3）安装elementUI
+
+```shell
+npm i element-ui -S
+```
+
+在`main.js`中引入`elementUI`
+
+### 8. Renren-fast-vue 安装依赖异常
+
+
+
+先配置镜像源
+
+```shell
+luo@luodeMacBook-Pro js % npm config set registry https://registry.npm.taobao.org
+
+# 查看npm配置信息
+luo@luodeMacBook-Pro js % npm config list
+```
+
+#### 异常二
+
+```shell
+npm ERR! code EINTEGRITY
+npm ERR! Verification failed while extracting node-sass@4.9.0:
+npm ERR! Verification failed while extracting node-sass@4.9.0:
+npm ERR! sha512-QFHfrZl6lqRU3csypwviz2XLgGNOoWQbo2GOvtsfQqOfL4cy1BtWnhx/XUeAO9LT3ahBzSRXcEO6DdvAH9DzSg== integrity checksum failed when using sha512: wanted sha512-QFHfrZl6lqRU3csypwviz2XLgGNOoWQbo2GOvtsfQqOfL4cy1BtWnhx/XUeAO9LT3ahBzSRXcEO6DdvAH9DzSg== but got sha512-SI4lSdH0vQNp+ZiFWDNi8pxwh+i++rPkasi8oncQ0KzKq325IvOhGjQYcIetSY2R2z8sLHoRWjmOoywk0nnRPg==. (163448 bytes)
+```
+
+解决办法
+
+```shell
+#清除当前的sass
+npm uninstall node-sass
+#重新安装sass，若没有报错，即可再次启动项目
+npm i node-sass --sass_binary_site=https://npm.taobao.org/mirrors/node-sass/
+#再次启动项目
+npm run dev
+```
+
+#### 异常三
+
+是`node.js`版本过高，导致与`sass`版本不匹配导致，升级`sass`版本即可
+
+```shell
+../src/create_string.cpp:17:25: error: no matching constructor for initialization of 'v8::String::Utf8Value'
+```
+
+解决：其实很简单，根据node和npm的版本指定要安装的node-sass版本
+
+**这样直接升级不可行**
+
+```shell
+luo@luodeMacBook-Pro renren-2 % npm install node-sass@4.14.1
+```
+
+node-sass和node支持的对应版本可以在[github](https://github.com/sass/node-sass) [node-sass](https://github.com/sass/node-sass/releases)查看。
+
+**解决**
+
+更改`package.json`中的`node-sass`版本为`"node-sass": "4.14.1",`
+
+如果还有问题，`sass-loader`的版本也升级一下`7.3.1`
+
+然后卸载已有的版本
+
+```shell
+npm uninstall node-sass 
+```
+
+安装指定的高版本
+
+```shell
+ npm install node-sass@4.14.1
+ 
+ npm install
+ 
+ npm run dev
+```
+
+
+
+**node-sass**
+
+Supported Node.js versions vary by release, please consult the [releases page](https://github.com/sass/node-sass/releases). Below is a quick guide for minimum support:
+
+| NodeJS  | Minimum node-sass version | Node Module |
+| ------- | ------------------------- | ----------- |
+| Node 14 | 4.14+                     | 83          |
+| Node 13 | 4.13+                     | 79          |
+| Node 12 | 4.12+                     | 72          |
+| Node 11 | 4.10+                     | 67          |
+| Node 10 | 4.9+                      | 64          |
+| Node 8  | 4.5.3+                    | 57          |
+
+**Supported Environments**
+
+| OS           | Architecture | Node                                                         |
+| ------------ | ------------ | ------------------------------------------------------------ |
+| Windows      | x86 & x64    | 0.10, 0.12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14    |
+| OSX          | x64          | 0.10, 0.12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14    |
+| Linux*       | x86 & x64    | 0.10, 0.12, 1, 2, 3, 4, 5, 6, 7, 8**, 9**, 10**^, 11**^, 12**^, 13**^, 14**^ |
+| Alpine Linux | x64          | 6, 8, 10, 11, 12, 13, 14                                     |
+| FreeBSD      | i386 amd64   | 10, 12, 13                                                   |
+
+* Linux support refers to Ubuntu, Debian, and CentOS 5+
+* Not available on CentOS 5
+  Only available on x64
+
+#### 无法显示首页
+
+首页内容是
+
+```text
+<% if (process.env.NODE_ENV === 'production') { %> <% }else { %> <% } %>
+```
+
+执行`npm run dev` 报错
+
+```shell
+Module build failed: Error: Cannot find module 'eslint/lib/formatters/stylish'
+```
+
+解决方式
+
+删除所有依赖，从新`npm install`
+
+### 9. linux添加环境变量
+
+```shell
+export PATH=$PATH:/opt/node-v12.18.3-linux-x64/bin
+```
+
+### 10. Renren-fast-vue
+
+#### （1）配置与后端的接口地址
+
+![Snip20200912_7](./images/Snip20200912_7.png)
+
+搜索`localhost`就能找到`static/config/index.js`，在其中修改请求接口
+
+注意`static/config/index.js`是开发环境，该文件的同级目录的其他文件配置的是其他环境
+
+#### （2）路由与组件路径
+
+![Snip20200912_3](./images/Snip20200912_3.png)
+
+路由创建好之后，在`src/views/modules`目录下创建`/product`文件夹，再在`/product`文件夹下创建`category.vue`视图组件
+
+![Snip20200912_6](./images/Snip20200912_6.png)
+
+### 11.关闭aslant
+
+`config/index.js`下设置
+
+```javascript
+    useEslint: false,
+```
+
+### 12. Mysql 连接异常
+
+MySQL第二天早上第一次连接超时报错，解决方法com.mysql.jdbc.exceptions.jdbc4.CommunicationsException: Communications link failure
+
+com.mysql.jdbc.exceptions.jdbc4.CommunicationsException: Communications link failure Last packet sent to the server was 0 ms ago
+
+最近碰到一个mysql5数据库的问题。就是一个标准的servlet/tomcat网络应用，后台使用mysql数据库。问题是待机一晚上后，第二天早上第一次登录总是失败。察看日志发现如下错误：
+
+“com.mysql.jdbc.exceptions.jdbc4.CommunicationsException: Communications link failure
+
+Last packet sent to the server was 0 ms ago.”
+
+
+经过一番调研，发现很多人都碰到过类似问题，但网上令人满意的回答并不多。mysql网站上的提问也很多，但并没有正确答案；百度知道上倒是有一个近似正确的回答。现将本人的解决办法总结一下：
+
+上述问题是由mysql5数据库的配置引起的。mysql5将其连接的等待时间(wait_timeout)缺省为8小时。在其客户程序中可以这样来查看其值：
+
+```shell
+mysql﹥
+
+mysql﹥ show global variables like 'wait_timeout';
+
++---------------+---------+
+
+| Variable_name | Value |
+
++---------------+---------+
+
+| wait_timeout | 28800 |
+
++---------------+---------+
+
+1 row in set (0.00 sec)
+```
+
+
+
+
+28800 seconds，也就是8小时。
+
+如果在wait_timeout秒期间内，数据库连接(java.sql.Connection)一直处于等待状态，mysql5就将该连接关闭。这时，你的Java应用的连接池仍然合法地持有该连接的引用。当用该连接来进行数据库操作时，就碰到上述错误。这解释了为什么我的程序第二天不能登录 的问题。
+
+你可能会想到在tomcat的数据源配置中有没有办法解决？的确，在jdbc连接url的配置中，你可以附上“autoReconnect=true”，但这仅对mysql5以前的版本起作用。增加“validation query”似乎也无济于事。
+
+本人觉得最简单的办法，就是对症下药：既然问题是由mysql5的全局变量wait_timeout的缺省值太小引起的，我们将其改大就好了。
+
+查看mysql5的手册，发现对wait_timeout的最大值分别是24天/365天(windows/linux)。以windows为 例，假设我们要将其设为21天，我们只要修改mysql5的配置文件“my.ini”(mysql5 installation dir)，增加一行：wait_timeout=1814400
+
+需要重新启动mysql5。
+
+linux系统配置文件：/etc/my.cnf
+
+测试显示问题解决了。
+
+
+也可以直接设置
+
+mysql修改wait_timeout
+
+　　mysql mysql> show global variables like 'wait_timeout';
+
+　　其默认值为8小时
+
+　　mysql的一个connection空闲时间超过8小时，mysql会自动断开该连接。
+
+　　1.修改配置
+
+```shell
+vi /etc/my.cnf
+
+[mysqld] 
+wait_timeout=10
+
+/etc/init.d/mysql restart
+```
+
+　　2.直接用sql命令行修改 mysql> set global wait_timeout=604800;
+
+除了wait_timeout，还有一个'interactive_timeout'
+
+同样可以执行SHOW GLOBAL VARIABLES LIKE 'interactive_timeout'来查询
+执行set global interactive_timeout=604800;来设置 
+
+### 13. WebStorm 自定义代码块
+
+![Snip20200917_1](./images/Snip20200917_1.png)
+
+在Template text可设置$APP$($中间的字符任意)，表示光标停留的位置
+
+`$APP$`相同的两个位置会被输入相同的值
+
+```javascript
+this.$http({
+  url: this.$http.adornUrl(`$APP1$`),
+  method: '$APP2$',
+  data: this.$http.adornData($APP3$, true)
+}).then(({data}) => {
+  if (data && data.code === 0) {
+
+    this.$message({
+      message: `$APP4$`,
+      type: 'success',
+      duration: 1500,
+      onClose: () => {
+
+      }
+    })
+    
+    $APP5$
+
+  } else {
+    this.$message.error(data.msg)
+  }
+}).catch(() => {
+})
+```
+
+### 14. mysql auto_increment biting 过大
+
+mysql auto_increment biting 过大
+
+![B4C829E5C0E8B3D1442A2A33D0BEF19C](/Users/luo/Library/Containers/com.tencent.qq/Data/Library/Caches/Images/B4C829E5C0E8B3D1442A2A33D0BEF19C.jpg)
+
+导致前端不能显示这么大的数字，只能显示最大为上图数字，导致所有的id都是一样，但是从后端接收到的id却是正确的
+
+### 15. 父子组件通信，使用switch滑块
+
+```html
+<el-table-column
+        prop="showStatus"
+        header-align="center"
+        align="center"
+        label="显示状态"
+      >
+        <template slot-scope="scope">
+          <!--<el-tag
+            :key="scope.row.brandId"
+            :type="scope.row.showStatus==1?'success':'info'"
+            effect="dark">
+            {{scope.row.showStatus==1?'显示':'隐藏'}}
+          </el-tag>-->
+
+          <el-switch
+            v-model="scope.row.showStatus"
+            :active-value="1"
+            :inactive-value="0"
+            active-color="#13ce66"
+            inactive-color="#ff4949"
+            active-text="显示"
+            @change="updateShowStatus(scope.row)"
+            inactive-text="隐藏">
+            <!--更新后的结果也会同步更新 scope.row.showStatus，然后传入方法updateShowStatus(scope.row)-->
+            <!--
+              错误写法
+              v-model="scope.row.showStatus===1" 这样将导致不能滑动
+              active-value="1"  这样绑定的是字符串，不能使用
+              inactive-value="0"
+
+            -->
+
+          </el-switch>
+
+        </template>
+      </el-table-column>
+```
+
+### 16. 分布式存储架构
+
+#### （1）微服务文件存储
+
+![Snip20200917_2](./images/Snip20200917_2.png)
+
+#### （2）浏览器上传文件到阿里云架构架构
+
+![Snip20200917_3](./images/Snip20200917_3.png)
+
+
+
+https://help.aliyun.com/document_detail/32016.html?spm=5176.8466032.0.dexternal.10661450m2E4vN
+
+阿里云OSS设置子账户
+
+![Snip20200918_2](./images/Snip20200918_2.png)
+
+子账户创建完成
+
+![image-20200918150510593](/Users/luo/Library/Application Support/typora-user-images/image-20200918150510593.png)
+
+如果没有记住子账号的`accessSecret`，则只能重新生成
+
+![Snip20200918_4](./images/Snip20200918_4.png)
+
+给子账户分配权限
+
+![Snip20200918_3](./images/Snip20200918_3.png)
+
+上传代码
+
+```java
+@Test
+    public void uploadFile() throws FileNotFoundException {
+        // Endpoint以杭州为例，其它Region请按实际情况填写。
+        String endpoint = "http://oss-cn-beijing.aliyuncs.com";
+        // 云账号AccessKey有所有API访问权限，建议遵循阿里云安全最佳实践，创建并使用RAM子账号进行API访问或日常运维，请登录 https://ram.console.aliyun.com 创建。
+        String accessKeyId = "LTAI4G5bG4akBEQF8DgfyaWM";
+        String accessKeySecret = "FXHde8zXyo4p8sDNtlzXANfVbv5pGZ";
+
+        // 创建OSSClient实例。
+        OSS ossClient = new OSSClientBuilder().build(endpoint, accessKeyId, accessKeySecret);
+
+        String filePath = "/Users/luo/Downloads/07 罗俊华.xls";
+        String fileName = filePath.substring(filePath.lastIndexOf("/") + 1);
+        // 上传文件流。
+        InputStream inputStream = new FileInputStream(filePath);
+        ossClient.putObject(
+                "guli-mall-luo",
+                fileName,
+                inputStream);
+
+// 关闭OSSClient。
+        ossClient.shutdown();
+
+        System.out.println(fileName+"，上传成功");
+    }
+```
+
+#### （3）使用spring cloud alibaba-oss 上传
+
+https://github.com/alibaba/aliyun-spring-boot/tree/master/aliyun-spring-boot-samples/aliyun-oss-spring-boot-sample
+
+需要先引入父依赖
+
+```xml
+<!--            阿里云服务的依赖-->
+<dependency>
+  <groupId>com.alibaba.cloud</groupId>
+  <artifactId>aliyun-spring-boot-dependencies</artifactId>
+  <version>1.0.0</version>
+  <type>pom</type>
+  <scope>import</scope>
+</dependency>
+```
+
+如果不引入父依赖而只导入`aliyun-oss-spring-boot-starter`的座标（包含版本号），则找不到这个方法
+
+```text
+com.aliyuncs.profile.DefaultProfile#getHttpClientConfig
+```
+
+导入依赖
+
+```xml
+        <!--        使用spring cloud alibaba oss 上传文件-->
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>aliyun-oss-spring-boot-starter</artifactId>
+        </dependency>
+```
+
+application.yml 配置
+
+```yaml
+alibaba:
+  cloud:
+    access-key: LTAI4G5bG4akBEQF8DgfyaWM
+    secret-key: FXHde8zXyo4p8sDNtlzXANfVbv5pGZ
+    oss:
+      endpoint: http://oss-cn-beijing.aliyuncs.com
+```
+
+#### （4）服务端签名后直传
+
+[官方文档所在位置](https://help.aliyun.com/document_detail/31926.html?spm=a2c4g.11186623.6.1676.254d74b86v3mXh)
+
+![Snip20200919_2](./images/Snip20200919_2.png)
+
+修改跨域请求访问
+
+1. 登录[OSS管理控制台](https://oss.console.aliyun.com/)。
+
+2. 单击Bucket列表，之后单击目标Bucket名称。
+
+3. 单击权限管理 > 跨域设置，在跨域设置区域单击设置。
+
+4. 单击创建规则，配置如下图所示。
+
+![Snip20200919_3](./images/Snip20200919_3.png)
+
+![Snip20200919_4](./images/Snip20200919_4.png)
+
+### 17. idea中java程序在run中显示而不再service中显示
+
+找到idea的配置文件`.idea/workspace.xml`，找到如下代码片段，删除隐藏的即可
+
+```xml
+  <component name="RunDashboard">
+    <option name="configurationTypes">
+      <set>
+        <option value="SpringBootApplicationConfigurationType" />
+      </set>
+    </option>
+    <option name="hiddenConfigurations">
+      <map>
+        <entry key="SpringBootApplicationConfigurationType">
+          <value>
+            <set>
+              <option value="RenrenFastApplication" />
+            </set>
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+```
+
+### 18. 后端校验
+
+#### （1）简单校验
+
+1. 在实体类`BrandEntity`上添加`package javax.validation.constraints;`包下的任意校验校验注解
+
+```java
+@Data
+@TableName("pms_brand")
+public class BrandEntity implements Serializable {
+	private static final long serialVersionUID = 1L;
+
+	/**
+	 * 品牌id
+	 */
+	@TableId(type = IdType.AUTO)
+	@Null
+	private Long brandId;
+	/**
+	 * 品牌名
+	 */
+	@NotBlank
+	private String name;
+	/**
+	 * 品牌logo地址
+	 */
+	@NotEmpty
+	private String logo;
+	/**
+	 * 介绍
+	 */
+	@NotBlank
+	private String descript;
+	/**
+	 * 显示状态[0-不显示；1-显示]
+	 */
+	//@TableLogic
+	@Max(value = 1)
+	@Min(0)
+	private Integer showStatus;
+	/**
+	 * 检索首字母
+	 */
+	@NotEmpty
+	//@Pattern(regexp = "/^[a-zA-Z]$/",message = "检索首字母必须是一个字母")
+	private String firstLetter;
+	/**
+	 * 排序
+	 */
+	@NotNull
+	@Min(value = 0,message = "序号不能小于0")
+	private Integer sort;
+
+}
+```
+
+2. 在`controller`上使用`@Valid`注解以启用校验规则
+
+```java
+    /**
+     * 一旦传入 BindingResult 对象，就不能全局捕获 BindingException
+     *
+     * */
+    @PostMapping("/save")
+    @ApiOperation("插入Brand")
+    public R save(@RequestBody @Valid BrandEntity brand/*, BindingResult bindingResult*/) {
+
+
+        brandService.save(brand);
+
+        return R.ok();
+    }
+```
+
+#### （2）分组校验
+
+1. 新建`AddGroup,UpdateGroup`接口作为组的标识
+
+```java
+/**
+ * 用于标识是更新数据
+ * */
+public interface UpdateGroup {
+}
+```
+
+```java
+/**
+ * 用于标识是新增数据
+ * */
+public interface AddGroup {
+}
+```
+
+2. 实体类上指定上面的接口作为分组（一个属性可以指定多个分组）
+
+```java
+@Data
+@TableName("pms_brand")
+public class BrandEntity implements Serializable {
+	private static final long serialVersionUID = 1L;
+
+	/**
+	 * 品牌id
+	 */
+	@TableId(type = IdType.AUTO)
+	@NotNull(message = "修改的时候brandId不能为空",groups = {UpdateGroup.class})
+	@Null(message = "新增品牌的时候不能指定brandId",groups = {AddGroup.class})
+	private Long brandId;
+  
+  	/**
+	 * 品牌名
+	 * 没有指定校验分组
+	 */
+	@NotBlank
+	private String name;
+}
+```
+
+3. 在`controller`上将`javax 包下的 @Valid`注解替换为`spring`包下的`@Validated`注解，顺便指定分组
+
+```java
+    /**
+     * 一旦传入 BindingResult 对象，就不能全局捕获 BindingException
+     *
+     * */
+    @PostMapping("/save")
+    @ApiOperation("插入Brand")
+    public R save(@RequestBody @Validated(AddGroup.class) BrandEntity brand/*, BindingResult bindingResult*/) {
+
+
+        brandService.save(brand);
+
+        return R.ok();
+    }
+```
+
+4. 但是这样指定分组之后，哪些没有指定校验分组的校验注解将失效
+
+   指定了分组的校验注解生效
+
+   ![Snip20200920_1](./images/Snip20200920_1.png)
+
+​	没有指定分组的校验注解失效
+
+![image-20200920110804146](/Users/luo/Library/Application Support/typora-user-images/image-20200920110804146.png)
+
+5. 没有指定分组的校验注解只能在没有指定分组的`@Validated`注解或者`@Valid`注解下生效
+
+#### （3）自定义校验注解
+
+1. 编写一个自定义校验注解
+
+   ```java
+   /**
+    *
+    * JSR 303 规定校验注解必须有以下三个属性
+    * */
+   @Target({ METHOD, FIELD, ANNOTATION_TYPE, CONSTRUCTOR, PARAMETER, TYPE_USE })
+   @Retention(RUNTIME)
+   //@Repeatable(List.class) 可重复注解
+   @Documented
+   /**
+    * 这个校验注解使用哪一个校验器进行校验
+    * 如果这里不指定，就需要在初始化的时候来指定
+    * */
+   @Constraint(validatedBy = {ListValidConstraintValidator.class})
+   public @interface ListValid {
+   
+       /**
+        * message 放在 ValidationMessages.properties 下
+        * key = 当前注解的全路径 + message
+        * */
+       String message() default "{com.guli.common.valid.ListValid.message}";
+   
+       Class<?>[] groups() default { };
+   
+       /**
+        * 需要导入 jakarta.validation-api 座标
+        * */
+       Class<? extends Payload>[] payload() default { };
+   
+       int[] value();
+   }
+   ```
+
+   
+
+2. 编写一个自定义校验器
+
+   ```java
+   /**
+    * 配置校验器
+    * ConstraintValidator<ListValid, Integer>
+    *     ListValid是这个校验器所要校验的注解
+    *     Integer 要校验的数据类型
+    * */
+   public class ListValidConstraintValidator implements ConstraintValidator<ListValid, Integer> {
+   
+   
+       public static final Set<Integer> SET = new HashSet<>();
+       /**
+        * 可以从初始化方法中获取注解的详细信息
+        * */
+       @Override
+       public void initialize(ListValid constraintAnnotation) {
+           for (int i : constraintAnnotation.value()) {
+               SET.add(i);
+           }
+       }
+   
+       /**
+        *
+        * @param value 此次需要校验的值
+        * @param context
+        * @return
+        */
+       @Override
+       public boolean isValid(Integer value, ConstraintValidatorContext context) {
+   
+           boolean contains = SET.contains(value);
+   
+           return contains;
+       }
+   }
+   ```
+
+   
+
+3. 关联自定义校验器和自定义校验注解
+
+   **@Constraint(validatedBy = {ListValidConstraintValidator.class})**
+
+   在这里可以指定多个校验器用于适配不同类型的变量
+
+```java
+/**
+ *
+ * JSR 303 规定校验注解必须有以下三个属性
+ * */
+@Target({ METHOD, FIELD, ANNOTATION_TYPE, CONSTRUCTOR, PARAMETER, TYPE_USE })
+@Retention(RUNTIME)
+//@Repeatable(List.class) 可重复注解
+@Documented
+/**
+ * 这个校验注解使用哪一个校验器进行校验
+ * 如果这里不指定，就需要在初始化的时候来指定
+ * */
+@Constraint(validatedBy = {ListValidConstraintValidator.class})
+public @interface ListValid {
+```
+
+4. 和使用其他注解一样的使用自定义校验注解
+
+   ```java
+   	/**
+   	 * 显示状态[0-不显示；1-显示]
+   	 */
+   	//@TableLogic
+   /*	可以这样校验，但是换一种方式进行校验
+   	@NotNull(groups = AddGroup.class)
+   	@Max(value = 1,groups = {AddGroup.class,UpdateGroup.class})
+   	@Min(value = 0,groups = {AddGroup.class,UpdateGroup.class})*/
+   	@ListValid(value = {0,1},message = "状态只能是0或1",groups = {AddGroup.class,UpdateGroup.class})
+   	private Integer showStatus;
+   ```
+
+   ### 19. 电商基本概念
+
+   #### （1）SPU
+
+   SPU: standard product unit （标准化产品单元）
+
+   是商品信息聚合的最小单位，是一组可复用，易检索的标准化信息的集合，该集合描述了一个产品的特性
+
+   SPU：iphone 11
+
+   #### （2）SKU
+
+   SKU：stock keeping unit （库存量单位）
+
+   即库存进出计量的基本单元，可以是件、盒、托盘等为单位。SKU这是对于大型连锁超市DC（配送中心）物流管理的一个必要方法。现在已经被引申为产品统一编号的简称，每种产品均对应有唯一的SKU号
+
+   SKU: iPhone 11 XS 128GB
+
+   #### （3）基本属性【规格参数】与销售属性
+
+   每个分类下的商品共享规格参数，与销售属性。只是有些商品不一定要用这个分类下的全部属性
+
+   * 属性是以三级分类组织起来的
+   * 规格参数中有些是可以提供检索的（cpu，内存）
+   * 规格参数也是基本属性，他们具有自己的分组
+   * 属性分组也是以三级分类组织起来的
+   * 属性名确定的，但是值是每一个不同商品来确定的
+
+   ![Snip20200920_4](./images/Snip20200920_4.png)
+
+   
+
+   
+
+
+### 19. 特定条件下jackson不序列化对象中的某些属性
+
+```java
+	/**
+	 * 当这个list中的元素为空的时候，就不进行json化
+	 * */
+	@JsonInclude(JsonInclude.Include.NON_EMPTY)
+	@TableField(exist = false)
+	private List<CategoryEntity> children;
+```
+
+### 20. Vue 当一个组件渲染完成之后再执行后续操作
+
+```javascript
+    // 新增 / 修改
+    addOrUpdateHandle (id) {
+      this.addOrUpdateVisible = true;
+
+      this.$nextTick(() => {
+        this.$refs.addOrUpdate.init(id)
+      })
+    },
+```
+
+### 21. vue 兄弟组件通信注意
+
+（1）hub 的创建一定要放在`mounted()`方法中
+
+### 22. Object 划分
+
+（1）PO persistant object 持久对象
+
+po就是对应数据库中某个表中的一条记录，多个记录可以用po的集合，po中应该不包含任何对数据库的操作
+
+（2）DO domain object 领域对象
+
+do就是从现实世界中抽象出来的有形或无形的实体
+
+（3）TO transfer object 数据传输对象
+
+不同的应用程序（微服务）之间传输的对象
+
+（4）DTO data transfer object 数据传输对象
+
+这个概念来源于J2EE的设计模式，原来的目的是为了EJB的分布式应用提供粗粒度的数据实体，以减少分布式调用的次数，而提高分布式调用的性能和降低网络负载，但在这里，泛指用于展示层与服务层之间数据传输对象
+
+（5）VO value object 值对象（view object：视图对象）
+
+通常用于业务层之间数据传递，和PO一样也是仅仅包含数据而已。但应是抽象出的业务对象，可以和表对应，也可以不，这根据业务需要，用new关键字创建，由GC回收
+
+（6）BO business object 业务对象
+
+从业务模型角度看，间UML元件领域模型中的领域对象。封装业务逻辑和java对象，通过调用DAO方法，结合PO、VO进行业务操作。business object：业务对象，主要作用是把业务逻辑封装为一个对象。这个对象可以包括一个或多个其他对象，比如一个简历、有教育经历、工作经历、社会关系等等。我们可以把教育经历对应一个PO，工作经历对应一个PO，社会关系对应一个PO。建立一个对应简历的BO对象处理简历，每个BO包含这些PO。这样处理业务逻辑时，我们就可以针对BO去处理
+
+（7）pojo plain ordinary java object 简单无规则java对象
+
+传统意义的java对象。就是说在一些object/relation mapping 工具中，能够做到维护数据库表记录的persistent object 完全是一个服务java bean 规范的纯 java 对象，没有增加别的属性和方法。我的理解就是最基本的java bean，只有属性字段以及setter() 和 getter() 方法
+
+pojo时 do/dto/bo/vo 的统称
+
+（8）DAO data access object 数据访问对象
+
+是一个sun的一个标准j2ee设计模式，这个模式中有个接口就是dao，它负责持久化层操作。为业务层提供接口，此对象用于访问数据库。通常和po结合使用，dao中包含了各种数据库的操作方法。通过他的方法，结合po对数据库进行相关操作，夹在业务逻辑与数据库资源中间，配合vo，提供数据库的CRUD操作
+
+
+
+### 23. 数据库表
+
+1. Pms_attr：属性表（cpu品牌）
+
+2. Pms_attr_group：属性分组表（主芯片）
+
+3. Pms_attr_attrgroup_relation：属性表与属性分组表的关系表（多对多，属性id对应属性分组id，比如将上面的，`cpu品牌`与`主芯片`关联起来）
+
+4. Pms_product_attr_value：商品属性值表（`cpu品牌`属性的值是什么`高通865`，此外还关联了spu的信息）
+
+5. Pms_spu_info：spu销售信息表
+
+6. Pms_sku_sale_attr_value：sku销售属性值表
+
+   ![Snip20200920_5](./images/Snip20200920_5.png?lastModify=1600774179)
+
+![Snip20200920_6](./images/Snip20200920_6.png?lastModify=1600774179)
+
+数据库路由 https://easydoc.xyz/s/78237135/ZUqEdvA4/hKJTcbfd
+
+### 24.使用图标
+
+图标部分可以显示，部分为空，先升级elementUI
+
+现在配置文件`package.json`中手动更新`element-ui`的版本号
+
+![Snip20200925_3](./images/Snip20200925_3.png)
+
+再通过命令行，手动更新
+
+```shell
+luo@luodeMacBook-Pro renren-fast-vue % npm update element-ui
+npm WARN element-ui@2.13.2 requires a peer of vue@^2.5.17 but none is installed. You must install peer dependencies yourself.
+
++ element-ui@2.13.2
+updated 5 packages in 19.426s
+
+```
+
+然后在`main.js`中引入
+
+```javascript
+/**
+ * 下面这个是我为了在 步骤条中使用图标而引入的
+ * */
+import 'element-ui/lib/theme-chalk/index.css'; // 引入element-ui的样式
+```
+
+### 25. vue 警告
+
+**[Violation] Added non-passive event listener to a scroll-blocking 'mousewheel' event**
+
+在基于 Element-ui 写项目的时候，Chrome 提醒：
+
+**[Violation] Added non-passive event listener to a scroll-blocking 'mousewheel' event. Consider marking event handler as 'passive' to make the page more responsive.**
+
+![image-20200928082837505](/Users/luo/Library/Application Support/typora-user-images/image-20200928082837505.png) 
+
+翻译过来如下：
+违反：没有添加被动事件监听器来阻止'touchstart'事件，请考虑添加事件管理者'passive'，以使页面更加流畅。
+
+原因是 Chrome51 版本以后，Chrome 增加了新的事件捕获机制－Passive Event Listeners；
+
+Passive Event Listeners：就是告诉前页面内的事件监听器内部是否会调用preventDefault函数来阻止事件的默认行为，以便浏览器根据这个信息更好地做出决策来优化页面性能。当属性passive的值为true的时候，代表该监听器内部不会调用preventDefault函数来阻止默认滑动行为，Chrome浏览器称这类型的监听器为被动（passive）监听器。目前Chrome主要利用该特性来优化页面的滑动性能，所以Passive Event Listeners特性当前仅支持mousewheel/touch相关事件。
+
+ 
+
+**解决：**
+
+**1、**npm i default-passive-events -S
+
+2、main.js中加入：import 'default-passive-events' （不一定要在main.js中引入，在报警告的地方添加就行了）
+
+### 26. stream 流式编程的map()中获取当前索引
+
+```java
+            String[] imagesUrlArray = skuDesc.split(",");
+
+            List<String> imagesUrlList = Arrays.asList(imagesUrlArray);
+
+            IntStream.range(0, imagesUrlList.size())
+                    .mapToObj(i -> {
+                        
+                        return null;
+                    }).collect(Collectors.toList());
+
+```
+
+### 27.微服务接口相互调用时可以的实体类可以不是同一个类，属性名对应即可
+
+（1）被调用的微服务接口
+
+```java
+    @PostMapping("/save")
+    @ApiOperation("插入SpuBounds")
+    public R save(@RequestBody SpuBoundsEntity spuBounds) {
+            spuBoundsService.save(spuBounds);
+
+        return R.ok();
+    }
+```
+
+（2）feign 接口
+
+```java
+@FeignClient(name = "coupon-service")
+public interface CouponServiceFeignClient {   
+		// 保存积分
+    @PostMapping("/sms/spubounds/save")
+    public R saveSpuBounds(@RequestBody SpuBoundsTo spuBoundsTo);
+}
+```
+
+（3）原理
+
+1. `couponServiceFeignClient.saveSpuBounds(spuBoundsTo)`
+2. `@RequestBody`将这个对象`spuBoundsTo`转为json
+3. 找到`coupon-service`微服务给`/sms/spubounds/save`发送请求，将上一步转的json放在请求体位置，发送请求
+4. `coupon-service`微服务接收到请求。请求体中有json数据`@RequestBody SpuBoundsEntity spuBounds`，将请求体中的json转为`SpuBoundsEntity`对象，只要json数据模型是兼容的，双方微服务无需使用同一个`to`
+
+调用者也可以使用`Map<String,String>`来接收被调用者发送过来的json数据
+
+调用者
+
+```java
+@FeignClient(name = "product-service")
+public interface ProductServiceFeignClient {
+
+    @GetMapping("/pms/skuinfo/getInfoAndReturnTo/{skuId}")
+    public Map<String,String> getInfoAndReturnTo(@PathVariable("skuId") Long skuId);
+}
+```
+
+被调用者
+
+```java
+    @GetMapping("/getInfoAndReturnTo/{skuId}")
+    @ApiOperation("根据skuId获取SkuInfo")
+    public SkuInfoEntity getInfoAndReturnTo(@PathVariable("skuId") Long skuId) {
+        SkuInfoEntity skuInfo = skuInfoService.getById(skuId);
+
+        return skuInfo;
+    }
+```
+
+
+
+### 28. jvm调优入门
+
+![Snip20200929_1](./images/Snip20200929_1.png)
+
+![Snip20200929_2](./images/Snip20200929_2.png)
+
+### 28.调整当前mysql的事务会话隔离级别
+
+mysql在事务处理的时候，连接mysql的客户端是看不到还未提交的数据，为了能看到，可以执行以下sql
+
+```sql
+set session transaction isolation level read uncommitted
+```
+
+### 29. Java返回给前端的数值太大，导致前端显示时精度损失的问题解决方式
+
+Java的Long类型的范围比JavaScript大，那就有可能导致精度损失的情况。
+
+先来看看JavaScript的Number的最大值
+
+![Snip20200930_1](./images/Snip20200930_1.png)
+
+再看看Java的Long类型的最大值
+
+![Snip20200930_2](./images/Snip20200930_2.png)
+
+解决方法很简单，如果Java返回给前端的是个对象，就是在对象里可能出现大数值的那个属性上加个注解，比如说这样：
+
+如果返回的就只是个Long类型的数，那还是转成字符串吧。
+
+`	@JsonSerialize(using = ToStringSerializer.class)`
+
+```java
+@Data
+@TableName("wms_ware_info")
+public class WareInfoEntity implements Serializable {
+	private static final long serialVersionUID = 1L;
+
+
+	/**
+	 * id
+	 */
+	@TableId
+	@JsonSerialize(using = ToStringSerializer.class)
+	private Long id;
+
+	/**
+	 * 仓库名
+	 */
+	private String name;
+}
+```
+
+### 30. 采购的简要流程
+
+![Snip20200930_3](./images/Snip20200930_3.png)
+
+合并到采购单的时候要有已经创建好了的采购单
+
+### 31. Mybatis-plus 使用枚举
+
+（1）配置包扫描
+
+`application.yml`
+
+```yml
+mybatis-plus:
+  mapperLocations: classpath:mapper/**/*.xml
+  # 配置文件配置枚举所在的包
+  # 配置枚举 支持通配符 * 或者 ; 分割
+  type-enums-package: com.guli.common.constant
+```
+
+（2）创建枚举
+
+* 枚举可以实现`mybatis-plus`的`IEnum<Integer>`接口，其中范型`<Integer>`是数据库字段中的类型
+* 也可以直接使用`mybatis-plus`的`@EnumValue`注解标记数据库中的字段
+
+```java
+
+public enum WarePurchaseStatusConstant implements IEnum<Integer> {
+
+    //采购单状态[0新建，1已分配，2正在采购，3已完成，4采购失败]
+    CREATED(0,"新建"),
+    ASSIGNED(1,"已分配"),
+    PURCHASING(2,"正在采购"),
+    FINISHED(3,"已完成"),
+    FAILED(4,"采购失败");
+
+//    @EnumValue
+    private Integer status;
+
+    @JsonValue //可以用在get方法或者属性字段上，一个类只能用一个，当加上@JsonValue注解是，序列化是只返回这一个字段的值。
+    private String message;
+
+
+    WarePurchaseStatusConstant(Integer status, String message) {
+        this.status = status;
+        this.message = message;
+    }
+
+    @Override
+    public Integer getValue() {
+        return this.status;
+    }
+
+    @Override
+    public String toString() {
+        return this.message;
+    }
+}
+```
+
+（3）json化问题
+
+如果不在枚举中使用`@JsonValue`标记枚举值对应的枚举映射，那么json化的时候将会使用`CREATED`,`ASSIGNED`等字段，这不是我们想要的
+
+@JsonCreator
+当json在反序列化时，默认选择类的无参构造函数创建类对象，没有无参构造函数时会报错，
+@JsonCreator作用就是指定一个有参构造函数供反序列化时调用。
+该构造方法的参数前面需要加上@JsonProperty,否则会报错。
+
+`@JsonValue`所在的maven座标（可以不写版本号，使用spring启动器的Jackson版本号）
+
+```xml
+	<dependency>
+	    <groupId>com.fasterxml.jackson.core</groupId>
+	    <artifactId>jackson-databind</artifactId>
+	    <version>2.9.3</version>
+	</dependency>
+	<!-- https://mvnrepository.com/artifact/com.fasterxml.jackson.core/jackson-core -->
+	<dependency>
+	    <groupId>com.fasterxml.jackson.core</groupId>
+	    <artifactId>jackson-core</artifactId>
+	    <version>2.9.3</version>
+	</dependency>
+	<!-- https://mvnrepository.com/artifact/com.fasterxml.jackson.core/jackson-annotations -->
+	<dependency>
+	    <groupId>com.fasterxml.jackson.core</groupId>
+	    <artifactId>jackson-annotations</artifactId>
+	    <version>2.9.3</version>
+	</dependency>
+```
+
+
+
+（4）在实体类中用枚举替换之前的实体类属性
+
+```java
+@Data
+@TableName("wms_purchase")
+public class PurchaseEntity implements Serializable {
+	private static final long serialVersionUID = 1L;
+
+
+	/**
+	 * 
+	 */
+	@TableId
+	@JsonSerialize(using = ToStringSerializer.class)
+	private Long id;	
+
+/**
+	 * 采购单状态[0新建，1已分配，2正在采购，3已完成，4采购失败]
+	 */
+
+	//private Integer status;
+	private WarePurchaseStatusConstant status;
+  
+}
+```
+
+### 32.单独获取某个前端框架js
+
+```shell
+# 任意位置初始化文件夹
+luo@luodeMacBook-Pro vue-temp % npm init
+
+# 下载所需的组件
+luo@luodeMacBook-Pro vue-temp % npm install axios
+luo@luodeMacBook-Pro vue-temp % npm install vue
+
+# 再到当前目录的 node_modules 下找到相关的 axios.js vue.js 就可以了
+# 必须是拷贝 dist目录下的才可以
+```
+
+### 33.spring mvc 映射视图
+
+```java
+@Component
+public class MyWebMvcConfig implements WebMvcConfigurer {
+    // 这样当访问 / 的时候就能自动跳转到 templates/login.html
+    @Override
+    public void addViewControllers(ViewControllerRegistry registry) {
+        registry.addViewController("/").setViewName("login");    
+    }
+}
+```
+
+### 34.spring mvc 重定向携带数据
+
+默认情况下，重定向是不能用`HttpServletRequest`来携带请求数据的，可以使用`RedirectAttributes`来解决
+
+原理：使用`HttpSession`，将数据放在`session`中，只要跳到下一个页面，取出了`session`中的数据之后，`session`就会被删除
+
+要解决分布式下的`session`问题	
+
+```java
+    @PostMapping("/hello")
+    public String hello(RedirectAttributes redirectAttributes){
+
+        redirectAttributes.addFlashAttribute("name","罗俊华");
+
+        return "redirect:/index.html"; //这样会重定向到微服务的本机ip地址
+      	return "redirect:http://guli.com/index.html";
+    }
+```
+
+### 35.打包spring boot
+
+能够让当前项目的`pom.xml`不继承`spring-boot-parent`也可以进行打包
+
+```xml
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>2.3.0.RELEASE</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+```
+
+### 36.前端格式化日期
+
+```shell
+#下载moment.js
+npm install moment --save
+```
+
+```javascript
+// 导入
+import moment from "moment"
+
+// 表单提交
+      dataFormSubmit () {
+        this.$refs['dataForm'].validate((valid) => {
+          if (valid) {
+            this.$http({
+              url: this.$http.adornUrl(`/sms/seckillsession/${!this.dataForm.id ? 'save' : 'update'}`),
+              method: 'post',
+              data: this.$http.adornData({
+                'id': this.dataForm.id || undefined,
+                'name': this.dataForm.name,
+                'startTime': moment(this.dataForm.startTime).format('YYYY-MM-DD h:mm:ss'), // 然后使用
+                'endTime': moment(this.dataForm.endTime).format('YYYY-MM-DD h:mm:ss'),
+                'status': this.dataForm.status,
+                'createTime': moment(this.dataForm.createTime).format('YYYY-MM-DD h:mm:ss'), // 注意格式和后端的写法不一致，但效果相同
+              })
+            }).then(({data}) => {
+```
+
+后端配合`jsckson`日期格式化
+
+```yml
+spring:
+	jackson:
+    time-zone: GMT+8
+    date-format: yyyy-MM-dd HH:mm:ss
+```
+
+
+
+## 二、高性能调优
+
+### 1.feign的重试机制
+
+`feign`远程调用的时候会执行这个方法
+
+```java
+final class SynchronousMethodHandler implements MethodHandler{
+  
+public Object invoke(Object[] argv) throws Throwable {
+    RequestTemplate template = buildTemplateFromArgs.create(argv); // 将请求的数据封装为json（已经编码成了字节数组），并且和feign信息组装为一个请求模版
+    Options options = findOptions(argv);
+    Retryer retryer = this.retryer.clone(); //重试器
+    while (true) {
+      try {
+        return executeAndDecode(template, options); // 发送请求调用微服务执行，并将返回的结果解码
+      } catch (RetryableException e) {
+        try {
+          retryer.continueOrPropagate(e); // 失败后，重试器要继续发送请求
+        } catch (RetryableException th) {
+          Throwable cause = th.getCause();
+          if (propagationPolicy == UNWRAP && cause != null) {
+            throw cause;
+          } else {
+            throw th;
+          }
+        }
+        if (logLevel != Logger.Level.NONE) {
+          logger.logRetry(metadata.configKey(), logLevel);
+        }
+        continue;
+      }
+    }
+  }
+}
+```
+
+重试器
+
+```java
+public interface Retryer extends Cloneable {
+
+  /**
+   * if retry is permitted, return (possibly after sleeping). Otherwise propagate the exception.
+   */
+  void continueOrPropagate(RetryableException e);
+
+  Retryer clone();
+
+  class Default implements Retryer {  //第一个重试器
+
+    private final int maxAttempts;
+    private final long period;
+    private final long maxPeriod;
+    int attempt;
+    long sleptForMillis;
+
+    public Default() {
+      this(100, SECONDS.toMillis(1), 5); //最多重试5次
+    }
+
+    public Default(long period, long maxPeriod, int maxAttempts) {
+      this.period = period;
+      this.maxPeriod = maxPeriod;
+      this.maxAttempts = maxAttempts;
+      this.attempt = 1;
+    }
+  }
+ 
+  	// 第二个重试器
+    Retryer NEVER_RETRY = new Retryer() {  // 一个匿名内部类
+
+    @Override
+    public void continueOrPropagate(RetryableException e) {
+      throw e; // 执行重试方法的时候会直接抛异常
+    }
+
+    @Override
+    public Retryer clone() {
+      return this;
+    }
+  };
+}
+```
+
+### 2.nginx动静分离
+
+> 静：图片、js、css等静态资源（以实际文件的存在形式）
+>
+> 动：服务器需要处理的请求
+
+![Snip20201010_1](./images/Snip20201010_1.png)
+
+### 3.springboot 方法过滤器
+
+> 用于处理`get`,`post`,`put`,`delete`
+
+```java
+public class WebMvcAutoConfiguration {
+  
+  	@Bean
+	@ConditionalOnMissingBean(HiddenHttpMethodFilter.class)
+	@ConditionalOnProperty(prefix = "spring.mvc.hiddenmethod.filter", name = "enabled", matchIfMissing = false)
+	public OrderedHiddenHttpMethodFilter hiddenHttpMethodFilter() {
+		return new OrderedHiddenHttpMethodFilter();
+	}
+  
+  		// 默认访问的静态资源路径
+  		@Override
+		public void addResourceHandlers(ResourceHandlerRegistry registry) {
+			if (!this.resourceProperties.isAddMappings()) {
+				logger.debug("Default resource handling disabled");
+				return;
+			}
+			Duration cachePeriod = this.resourceProperties.getCache().getPeriod();
+			CacheControl cacheControl = this.resourceProperties.getCache().getCachecontrol().toHttpCacheControl();
+			if (!registry.hasMappingForPattern("/webjars/**")) {
+				customizeResourceHandlerRegistration(registry.addResourceHandler("/webjars/**")
+						.addResourceLocations("classpath:/META-INF/resources/webjars/")
+						.setCachePeriod(getSeconds(cachePeriod)).setCacheControl(cacheControl));
+			}
+			String staticPathPattern = this.mvcProperties.getStaticPathPattern();
+			if (!registry.hasMappingForPattern(staticPathPattern)) {
+				customizeResourceHandlerRegistration(registry.addResourceHandler(staticPathPattern)
+						.addResourceLocations(getResourceLocations(this.resourceProperties.getStaticLocations())) // this.resourceProperties.getStaticLocations() 获取静态资源路径
+						.setCachePeriod(getSeconds(cachePeriod)).setCacheControl(cacheControl));
+			}
+		}
+  
+  	// 欢迎页的配置
+  		@Bean
+		public WelcomePageHandlerMapping welcomePageHandlerMapping(ApplicationContext applicationContext,
+				FormattingConversionService mvcConversionService, ResourceUrlProvider mvcResourceUrlProvider) {
+			WelcomePageHandlerMapping welcomePageHandlerMapping = new WelcomePageHandlerMapping(
+					new TemplateAvailabilityProviders(applicationContext), applicationContext, getWelcomePage(),
+					this.mvcProperties.getStaticPathPattern()); // 静态资源路径
+			welcomePageHandlerMapping.setInterceptors(getInterceptors(mvcConversionService, mvcResourceUrlProvider));
+			welcomePageHandlerMapping.setCorsConfigurations(getCorsConfigurations());
+			return welcomePageHandlerMapping;
+		}
+  	
+  // 获取欢迎页
+  		private Optional<Resource> getWelcomePage() {
+			String[] locations = getResourceLocations(this.resourceProperties.getStaticLocations());
+			return Arrays.stream(locations).map(this::getIndexHtml).filter(this::isReadable).findFirst();
+		}
+		// 欢迎页所在的位置
+		private Resource getIndexHtml(String location) {
+			return this.resourceLoader.getResource(location + "index.html");
+		}
+}
+```
+最终的静态资源路径
+
+```java
+	private static final String[] CLASSPATH_RESOURCE_LOCATIONS = { "classpath:/META-INF/resources/",
+			"classpath:/resources/", "classpath:/static/", "classpath:/public/" };
+
+	/**
+	 * Locations of static resources. Defaults to classpath:[/META-INF/resources/,
+	 * /resources/, /static/, /public/].
+	 */
+	private String[] staticLocations = CLASSPATH_RESOURCE_LOCATIONS;
+```
+
+
+
+
+
+### 4.使用thymeleaf的步骤
+
+```xml
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-thymeleaf</artifactId>
+        </dependency>
+```
+
+```yml
+spring:
+  thymeleaf:
+      cache: false
+```
+
+访问项目根路径`localhost:10000/`，就能默认跳转 `templates/index.html`
+
+引入`devtools`，`optional`必须设置为`true`
+
+```xml
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <optional>true</optional>
+        </dependency>
+```
+
+运行期间使用快捷键来编译
+
+![Snip20201010_2](./images/Snip20201010_2.png)
+
+### 5.nginx反向代理
+
+![Snip20201010_3](./images/Snip20201010_3.png)
+
+
+
+![Snip20201010_4](./images/Snip20201010_4.png)
+
+![Snip20201010_5](./images/Snip20201010_5.png)
+
+```shell
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log  /var/log/nginx/access.log  main;
+
+    sendfile        on;
+    #tcp_nopush     on;
+
+    keepalive_timeout  65;
+
+    #gzip  on;
+
+    include /etc/nginx/conf.d/*.conf; # 注意，会加载 /etc/nginx/conf.d/目录下的所有以.conf结尾的文件作为配置文件
+}
+```
+
+（1）nginx官方文档
+
+> http://nginx.org/en/docs/
+
+（2）使用nginx反向代理到`gateway`时，nginx会扔掉`host`
+
+```shell
+    location ~ {
+        proxy_pass   http://guli-mall;
+        proxy_set_header Host $host;    # 传递请求头
+    }
+```
+
+![Snip20201010_6](./images/Snip20201010_6.png)
+
+### 6.压力测试
+
+1、响应时间（Response Time : RT）
+
+响应时间是指用户从客户端发起一个请求开始，到客户端收到从服务器端返回的响应结束，整个过程所消耗的时间
+
+2、HPS（Hits Per Second）：每秒点击次数，单位是`次/秒`
+
+3、TPS（Transaction per Second）：系统每秒处理交易数，单位是`笔/秒`，（一个完整的业务）
+
+4、QPS（Query per Second）：系统每秒处理查询次数，单位是`次/秒`。
+
+​	对于互联网业务中，如果某些业务有且仅有一个请求连接，那么`TPS=QPS=HPS`，一般情况下用`TPS`来衡量整个业务流程，用`QPS`来衡量接口查询次数，用`HPS`来表示对服务器单机请求
+
+5、无论`TPS`、`QPS`、`HPS`，此指标是衡量系统处理能力非常重要的指标，越大越好，根据经验，一般情况如下
+
+* 金融行业：`1000TPS`~`50000TPS`，不包括互联网化的活动
+* 保险行业：`100TPS`~`100000TPS`，不包括互联网化的活动
+* 制造行业：`10TPS`~`5000TPS`
+* 互联网电子商务：`10000TPS`~`1000000TPS`
+* 互联网中型网站：`1000TPS`~`50000TPS`
+* 互联网小型网站：`500TPS`~`10000TPS`
+
+6、最大响应时间（Max Response Time）指用户发出请求或者指令到系统做出反应（响应）的最大时间
+
+7、`90%`最小响应时间（90% Response Time）是指所有用户的响应时间进行排序，第`90%`的响应时间
+
+8、从外部看，性能测试主要关注如下三个指标
+
+* 吞吐量：每秒钟系统能够处理的请求数、任务数
+* 响应时间：服务处理一个请求或一个任务的耗时
+* 错误率：一批请求中结果出错的请求所占比例
+
+#### （1）端口回收
+
+`windows`本身提供端口访问机制的问题
+
+`windows`提供给`Tcp/ip`连接的端口为`1024-5000`，并且要4分钟来循环回收他们。做压力测试时，每个请求都要使用一个端口来发送请求，就导致我们在短时间内跑大量的请求时，端口被占满了
+
+`cmd`中，用`regedit`命令打开注册表
+
+在`HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`下，
+
+右键`parameters`，添加一个新的`DWORD`，名字为`MaxUserPort`
+
+然手双击`MaxUserPort`，输入值为`65534`，基础选择 十进制（如果是分布式运行的话，控制机器和负载机器都需要这样操作）
+
+还可以指定`tcp`端口回收时间
+
+`TCPTimedWaitDelay`:30
+
+重启
+
+![Snip20201010_7](./images/Snip20201010_7.png)
+
+![Snip20201010_8](./images/Snip20201010_8.png)
+
+> 影响性能考虑的点
+>
+> 数据库、应用程序、中间件、（nginx、apigateway、tomcat）、网络带宽、操作系统
+>
+> 首先考虑应用属于`cpu`密集型还是`io`密集型
+>
+> `io密集型`：网路io、磁盘读写、数据库、redis
+
+## 三、性能监控
+
+### 1.java内存模型
+
+![Snip20201011_1](./images/Snip20201011_1.png)
+
+JIT编译产物：运行期间，若代码没编译，那么编译的代码缓存都放在这里
+
+### 2.jconsole和jvisualVM
+
+`jvisualVM`是升级版的`jconsole`，可监控本地和远程应用，远程应用需要配置
+
+#### （1）启动
+
+在有`java`环境的机器上，执行`jconsole`就能启动
+
+```shell
+luo@luodeMacBook-Pro ~ % jconsole
+                                                                 luo@luodeMacBook-Pro ~ % jvisualvm
+```
+
+![Snip20201011_2](./images/Snip20201011_2.png)
+
+> 驻留：线程池中空闲的线程
+>
+> 休眠：调用`sleep()`
+>
+> 等待：调用`wait()`
+>
+> 监视：两个线程可能发生了锁的竞争，正在等待锁的释放
+
+#### （2）更新插件
+
+> https://visualvm.github.io/
+>
+> 插件列表：https://visualvm.github.io/pluginscenters.html
+>
+> jdk1.8 8u131插件地址：https://visualvm.github.io/uc/8u131/updates.html
+
+如果不能更新插件，需要到这里编辑最新的插件地址
+
+![Snip20201011_4](./images/Snip20201011_4.png)
+
+粘贴最新的地址，url的文件名是`updates.xml.gz`
+
+![Snip20201011_6](./images/Snip20201011_6.png)
+
+安装插件`visualGC`
+
+![Snip20201011_8](./images/Snip20201011_8.png)
+
+预览插件
+
+![Snip20201011_9](./images/Snip20201011_9.png)
+
+### 3.调整jmeter的内存
+
+因为`jmeter`老是`Full GC`，所以调大`jmeter`的内存
+
+
+
+```shell
+vi jmeter # 时发现如下提示
+##   Environment variables:
+##   JVM_ARGS - optional java args, e.g. -Dprop=val
+##
+##   e.g.
+##   JVM_ARGS="-Xms1g -Xmx1g" jmeter etc.
+##
+##   Do not set the variables in this script. Instead put them into a script
+##   setenv.sh in JMETER_HOME/bin to keep your customizations separate.
+
+# 所以在 JMETER_HOME/bin 新建一个
+
+vi setenv.sh
+# 输入以下内容
+JVM_ARGS="-Xms2g -Xmx2g"
+```
+
+经过压测发现`gateway`是`cpu密集型`，不怎么吃内存
+
+### 4.中间件压力测试
+
+直接压测`product-service`
+
+| Label                     | # Samples | Average | Median | 90% Line | 95% Line | 99% Line | Min  | Max  | Error % | Throughput | Received KB/sec | Sent KB/sec |
+| ------------------------- | --------- | ------- | ------ | -------- | -------- | -------- | ---- | ---- | ------- | ---------- | --------------- | ----------- |
+| Thread Group:HTTP Request | 351677    | 23      | 11     | 61       | 106      | 185      | 1    | 513  | 0.00%   | 1752.7237  | 66212.75        | 203.69      |
+| TOTAL                     | 351677    | 23      | 11     | 61       | 106      | 185      | 1    | 513  | 0.00%   | 1752.7237  | 66212.75        | 203.69      |
+
+经过`gateway`+`product-service`
+
+| Label                     | # Samples | Average | Median | 90% Line | 95% Line | 99% Line | Min  | Max  | Error % | Throughput | Received KB/sec | Sent KB/sec |
+| ------------------------- | --------- | ------- | ------ | -------- | -------- | -------- | ---- | ---- | ------- | ---------- | --------------- | ----------- |
+| Thread Group:HTTP Request | 316993    | 50      | 20     | 100      | 138      | 227      | 2    | 6531 | 0.00%   | 779.3332   | 29477.97        | 89.04       |
+| TOTAL                     | 316993    | 50      | 20     | 100      | 138      | 227      | 2    | 6531 | 0.00%   | 779.3332   | 29477.97        | 89.04       |
+
+经过`nginx`+`gateway`+`product-service`（全链路）
+
+| Label        | # Samples | Average | Median | 90% Line | 95% Line | 99% Line | Min  | Max   | Error % | Throughput | Received KB/sec | Sent KB/sec |
+| ------------ | --------- | ------- | ------ | -------- | -------- | -------- | ---- | ----- | ------- | ---------- | --------------- | ----------- |
+| HTTP Request | 16392     | 930     | 197    | 288      | 322      | 60008    | 5    | 60087 | 1.22%   | 50.93119   | 1905.94         | 5.62        |
+| TOTAL        | 16392     | 930     | 197    | 288      | 322      | 60008    | 5    | 60087 | 1.22%   | 50.93119   | 1905.94         | 5.62        |
+
+经过`nginx`+`gateway`+开启三个 `product-service`（全链路）
+
+| Label                     | # Samples | Average | Median | 90% Line | 95% Line | 99% Line | Min  | Max  | Error % | Throughput | Received KB/sec | Sent KB/sec |
+| ------------------------- | --------- | ------- | ------ | -------- | -------- | -------- | ---- | ---- | ------- | ---------- | --------------- | ----------- |
+| Thread Group:HTTP Request | 13958     | 284     | 268    | 402      | 466      | 616      | 23   | 2394 | 0.00%   | 125.91791  | 4769.87         | 13.9        |
+| TOTAL                     | 13958     | 284     | 268    | 402      | 466      | 616      | 23   | 2394 | 0.00%   | 125.91791  | 4769.87         | 13.9        |
+
+`category`服务`/pms/category/treeNodeList`，无缓存
+
+| Label                     | # Samples | Average | Median | 90% Line | 95% Line | 99% Line | Min  | Max  | Error % | Throughput | Received KB/sec | Sent KB/sec |
+| ------------------------- | --------- | ------- | ------ | -------- | -------- | -------- | ---- | ---- | ------- | ---------- | --------------- | ----------- |
+| Thread Group:HTTP Request | 2222      | 639     | 657    | 928      | 996      | 1261     | 93   | 1624 | 0.00%   | 60.4067    | 15418.34        | 8.49        |
+| TOTAL                     | 2222      | 639     | 657    | 928      | 996      | 1261     | 93   | 1624 | 0.00%   | 60.4067    | 15418.34        | 8.49        |
+
+`category`服务`/pms/category/treeNodeList`，加缓存
+
+| Label                     | # Samples | Average | Median | 90% Line | 95% Line | 99% Line | Min  | Max  | Error % | Throughput | Received KB/sec | Sent KB/sec |
+| ------------------------- | --------- | ------- | ------ | -------- | -------- | -------- | ---- | ---- | ------- | ---------- | --------------- | ----------- |
+| Thread Group:HTTP Request | 42391     | 58      | 36     | 140      | 192      | 298      | 3    | 1710 | 0.00%   | 677.65966  | 172967.15       | 95.3        |
+| TOTAL                     | 42391     | 58      | 36     | 140      | 192      | 298      | 3    | 1710 | 0.00%   | 677.65966  | 172967.15       | 95.3        |
+
+`category`服务`/pms/category/treeNodeList`，加缓存+`nginx`+`gateway`
+
+| Label                     | # Samples | Average | Median | 90% Line | 95% Line | 99% Line | Min  | Max   | Error % | Throughput | Received KB/sec | Sent KB/sec |
+| ------------------------- | --------- | ------- | ------ | -------- | -------- | -------- | ---- | ----- | ------- | ---------- | --------------- | ----------- |
+| Thread Group:HTTP Request | 9695      | 1949    | 1341   | 1794     | 2015     | 60008    | 12   | 66950 | 1.03%   | 24.61935   | 6225.06         | 3.41        |
+| TOTAL                     | 9695      | 1949    | 1341   | 1794     | 2015     | 60008    | 12   | 66950 | 1.03%   | 24.61935   | 6225.06         | 3.41        |
+
+`gateway`，渲染首页全部数据（包括静态资源，有些静态资源没有，导致错误率100%）
+
+| Label     | # Samples | Average | Median | 90% Line | 95% Line | 99% Line | Min  | Max  | Error % | Throughput | Received KB/sec | Sent KB/sec |
+| --------- | --------- | ------- | ------ | -------- | -------- | -------- | ---- | ---- | ------- | ---------- | --------------- | ----------- |
+| indexPage | 50        | 2352    | 2336   | 2723     | 2755     | 2778     | 1891 | 2778 | 100.00% | 17.64291   | 57701.54        | 134.69      |
+| TOTAL     | 50        | 2352    | 2336   | 2723     | 2755     | 2778     | 1891 | 2778 | 100.00% | 17.64291   | 57701.54        | 134.69      |
+
+### 5.优化方案
+
+可以看出，中间件越多，性能损失越大，大多都损失在交互上（网络IO）
+
+1、优化业务逻辑
+
+* 数据库（mysql优化）
+
+  将`category`的多次查询改为，一次查询所有`category`，然后使用递归拼接成树形节点的方式
+
+* 模版渲染速度
+
+  ```yml
+  spring:
+  	thymeleaf:
+      cache: true
+  ```
+
+  
+
+* 静态资源不要放在项目中
+
+  静态资源放在`nginx`中
+
+2、优化中间件
+
+3、买更好的网络设备
+
+### 6.nginx动静分离
+
+更改资源路径`href`和`src`前加上`static/`
+
+![Snip20201011_5](./images/Snip20201011_5.png)
+
+![Snip20201011_7](./images/Snip20201011_7.png)
+
+2、将静态资源文件移动到nginx静态资源目录中
+
+![Snip20201011_10](./images/Snip20201011_10.png)
+
+```shell
+luo@luodeMacBook-Pro index % pwd
+/Volumes/extend/docker_public_file_mapping/guli_shop/nginx/html/static/index
+luo@luodeMacBook-Pro index % ls -l
+total 1280
+drwxrwxrwx  1 luo  staff  131072 10 10 10:21 css
+drwxrwxrwx  1 luo  staff  131072 10 10 10:21 img
+drwxrwxrwx  1 luo  staff  131072 10 10 10:21 js
+drwxrwxrwx  1 luo  staff  131072 10 10 10:21 json
+drwxrwxrwx  1 luo  staff  131072 10 10 10:57 myJs
+```
+
+3、配置`nginx`
+
+1.Nginx路径匹配符号
+
+* = 表示精确匹配
+* ^~ 表示uri以某个常规字符串开头,大多情况下用来匹配url路径，nginx不对url做编码，因此请求为/static/20%/aa，可以被规则^~ /static/ /aa匹配到（注意是空格）。
+* ~ 正则匹配(区分大小写)
+* ~* 正则匹配(不区分大小写)
+* !~和!~*分别为区分大小写不匹配及不区分大小写不匹配 的正则
+* / 任何请求都会匹配
+
+2.符号的优先级
+
+> 首先匹配 =，其次匹配^~, 其次是按文件中顺序的正则匹配，最后是交给 / 通用匹配。当有匹配成功时候，停止匹配，按当前匹配规则处理请求。
+
+3.例如
+
+```shell
+location = / {  
+   #规则A  
+}  
+location = /login {  
+   #规则B  
+}  
+location ^~ /static/ {  
+   #规则C  
+}  
+location ~ \.(gif|jpg|png|js|css)$ {  
+   #规则D  
+}  
+location ~* \.png$ {  
+   #规则E  
+}  
+location !~ \.xhtml$ {  
+   #规则F  
+}  
+location !~* \.xhtml$ {  
+   #规则G  
+}  
+location / {  
+   #规则H  
+} 
+```
+
+```shell
+访问根目录/， 比如http://localhost/ 将匹配规则A
+
+访问 http://localhost/login 将匹配规则B，http://localhost/register 则匹配规则H
+
+访问 http://localhost/static/a.html 将匹配规则C
+
+访问 http://localhost/a.gif, http://localhost/b.jpg 将匹配规则D，规则E不起作用，而 http://localhost/static/c.png 则优先匹配到规则C
+
+访问 http://localhost/a.PNG 则匹配规则E，而不会匹配规则D，因为规则E不区分大小写。
+
+访问 http://localhost/a.xhtml 不会匹配规则F和规则G，http://localhost/a.XHTML不会匹配规则G，因为不区分大小写。规则F，规则G属于排除法，符合匹配规则但是不会匹配到，所以想想看实际应用中哪里会用到。
+
+访问 http://localhost/category/id/1111 则最终匹配到规则H，因为以上规则都不匹配，这个时候应该是nginx转发请求给后端应用服务器，比如FastCGI（php），tomcat（jsp），nginx作为方向代理服务器存在。
+```
+
+我的实际配置
+
+```shell
+server {
+    listen       80;
+    #listen  [::]:80;
+    server_name  guli.com;
+
+		# 两个 location 的先后顺序无关
+    location ~ {
+        proxy_pass   http://guli-mall;
+        proxy_set_header Host $host;    # 传递请求头
+    }
+    location  ^~ /static {
+        root   /usr/share/nginx/html/;
+    }
+```
+
+### 7.增大服务的内存占用
+
+`-Xmx1000m -Xms1000m -Xmn500m`
+
+> -Xmx 最大堆内存占用
+>
+> -Xms 初始堆内存占用
+>
+> -Xmn 新生代内存空间
+
+## 四、缓存与分布式锁
+
+### 1.哪些数据适合放入缓存中
+
+1、及时性，数据一致性要求不高的
+
+​	快递状态
+
+2、访问量大且更新频率不高的数据（读多，写少）
+
+![Snip20201011_11](./images/Snip20201011_11.png)
+
+### 2.缓存的种类
+
+（1）本地缓存
+
+```java
+Map<Key,Object> map = new ConcurrentHashMap<>();
+```
+
+
+
+单体应用情况下
+
+![Snip20201011_12](./images/Snip20201011_12.png)
+
+分布式缓存：本地模式在分布式下的问题
+
+![Snip20201011_14](./images/Snip20201011_14.png)
+
+> 问题：一个微服务对数据库做更新操作之后，要通知其他微服务更新自己内存中的缓存
+
+2、分布式缓存
+
+![Snip20201011_15](./images/Snip20201011_15.png)
+
+### 3.使用redis
+
+1、导入依赖
+
+```xml
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+```
+
+2、yml
+
+```yml
+spring:
+	redis:
+    host: localhost
+    port: 6379
+```
+
+3、使用`@EnableCaching`启用缓存
+
+
+
+### 4.redis在并发下出现的异常
+
+`lettuce 5.1.8`有异常
+
+>`io.netty.util.internal.OutOfDirectMemoryError`：堆外内存溢出
+>
+>上线长时间以后也一定出现这个问题
+
+`spring boot 2.0`以后，`spring-boot-starter-data-redis`使用`io.lettuce`作为操作`redis`的客户端，而它使用`io.netty`进行网络通信。主要是`io.lettuce`的`bug`导致`netty`堆外内存溢出
+
+我们设置`category`的`jvm`参数`-Xmx300m`，`netty`如果没有指定堆外内存，默认会使用`-Xmx300m`作为堆外内存
+
+可以通过`-Dio.netty.maxDirectMemory`进行设置，但是不能只通过`-Dio.netty.maxDirectMemory`来调大内存
+
+出现异常的地方
+
+![Snip20201011_3](./images/Snip20201011_3.png)
+
+#### （1）解决办法
+
+1、升级`lettuce`客户端
+
+2、切换使用`jedis`，`jedis`底层没有使用`netty`
+
+```xml
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>io.lettuce</groupId>
+                    <artifactId>lettuce-core</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>redis.clients</groupId>
+            <artifactId>jedis</artifactId>
+        </dependency>
+```
+
+### 5. redisTemplate、Lettuce、Jedis
+
+`lettuce`和`jedis`都是操作`redis`的最底层的客户端，封装了操作`redis`的一些`api`，
+
+而`redisTemplate`对上面两个再次封装简化
+
+```java
+// 可以看出
+@Import({ LettuceConnectionConfiguration.class, JedisConnectionConfiguration.class })
+public class RedisAutoConfiguration {
+}
+```
+
+### 6.高并发下的缓存失效问题
+
+#### （1）缓存穿透
+
+指，查询一个一定不存在的数据，由于缓存是不命中，将去查询数据库，但数据库也没有这条记录，我们没有将这次查询到的`null`写入缓存，这将导致这个不存在的数据每次请求都要到存储层去查询，失去了缓存的意义
+
+1、风险
+
+利用不存在数据进行攻击，数据库瞬时压力增大，最终导致崩溃
+
+![Snip20201011_13](./images/Snip20201011_13.png)
+
+2、解决
+
+将`null`结果缓存，并加入短暂的过期时间
+
+#### （2）缓存雪崩
+
+缓存雪崩是指在我们设置了缓存`key`采用了相同的过期时间，导致缓存在某一时刻同时失效，请求全部转发到`DB`，`DB`瞬时压力过重雪崩
+
+![Snip20201011_16](./images/Snip20201011_16.png)
+
+1、解决
+
+原有的失效时间基础上增加一个随机值，比如`1～5`分钟随机，这样每一个缓存的过期时间的重复率就会降低，就很难引发集体失效的事件
+
+#### （3）缓存击穿
+
+对于一些设置了过期时间的`key`，如果这些`key`可能会在某些时间点被高并发的访问，是一种非常`热点`的数据。
+
+如果这个`key`在大量请求同时进来前正好失效，那么所有对于这个`key`的数据查询都落到`db`，我们称之为缓存击穿
+
+![Snip20201011_17](./images/Snip20201011_17.png)
+
+1、解决
+
+加锁，大量并发只让一个人去查，其他人等待，查到以后释放锁，其他人获取到锁，先查缓存，就会有数据，不用去`db`
+
+### 7.分析缓存问题
+
+目前的缓存
+
+```java
+    
+/**
+* 1、缓存空结果，解决缓存穿透
+* 2、设置过期时间（加上随机事件），解决缓存雪崩
+* 3、加锁，解决缓存击穿
+*/
+public TreeNode<CategoryEntity> treeNodeList() {
+
+        ValueOperations<String, String> ops = stringRedisTemplate.opsForValue();
+
+        String treeNodeList = ops.get("treeNodeList");
+
+        if (!StringUtils.isEmpty(treeNodeList)) {
+            TypeReference<TreeNode<CategoryEntity>> type = new TypeReference<TreeNode<CategoryEntity>>() {
+            };
+            return JSON.parseObject(treeNodeList, type);
+        }
+
+        List<CategoryEntity> list = this.list();
+
+        //方式一：因为ElementUI不可以解析对象中的属性 node.name 作为标签的名字，所以要使用方式二
+        TreeNode<CategoryEntity> treeNode = new TreeNode<>();
+
+        Comparator<TreeNode<CategoryEntity>> comparator = (TreeNode<CategoryEntity> treeNode1, TreeNode<CategoryEntity> treeNode2) -> {
+            return treeNode1.getNode().getSort() - treeNode2.getNode().getSort();
+        };
+
+        ListToTree.parse(list, treeNode, 0L, comparator);
+
+        ops.set("treeNodeList", JSON.toJSONString(treeNode));
+
+        return treeNode;
+    }
+```
+
+（1）分布式下，如何加锁？
+
+![Snip20201011_18](./images/Snip20201011_18.png)
+
+（2）本地锁
+
+无论是`synchronized`，还是`juc`下的锁，都只能锁住当前进程，俗称进程锁
+
+想要在分布式情况下锁住所有，必须使用分布式锁
+
+![Snip20201011_19](./images/Snip20201011_19.png)
+
+### 8.分布式锁演进
+
+#### （1）基本原理
+
+![Snip20201012_1](./images/Snip20201012_1.png)
+
+使用`redis` 设置锁`http://www.redis.cn/commands/set.html`
+
+以下是官方文档
+
+> SET key value [EX seconds] [PX milliseconds] [NX|XX]
+>
+> 将键`key`设定为指定的“字符串”值。
+>
+> 如果 key 已经保存了一个值，那么这个操作会直接覆盖原来的值，并且忽略原始类型。
+>
+> 当`set`命令执行成功之后，之前设置的过期时间都将失效
+>
+> 从2.6.12版本开始，redis为`SET`命令增加了一系列选项:
+>
+> * `EX` *seconds* – Set the specified expire time, in seconds.
+> * `PX` *milliseconds* – Set the specified expire time, in milliseconds.
+> * `NX` – Only set the key if it does not already exist.
+> * `XX` – Only set the key if it already exist.
+> * `EX` *seconds* – 设置键key的过期时间，单位时秒
+> * `PX` *milliseconds* – 设置键key的过期时间，单位时毫秒
+> * `NX` – 只有键key不存在的时候才会设置key的值
+> * `XX` – 只有键key存在的时候才会设置key的值
+>
+> **注意:** 由于`SET`命令加上选项已经可以完全取代[SETNX](http://www.redis.cn/commands/setnx.html), [SETEX](http://www.redis.cn/commands/setex.html), [PSETEX](http://www.redis.cn/commands/psetex.html)的功能，所以在将来的版本中，redis可能会不推荐使用并且最终抛弃这几个命令。
+>
+> #### 返回值
+>
+> [simple-string-reply](http://www.redis.cn/topics/protocol.html#simple-string-reply):如果`SET`命令正常执行那么回返回`OK`，否则如果加了`NX` 或者 `XX`选项，但是没有设置条件。那么会返回nil。
+>
+> #### 设计模式
+>
+> **注意:** 下面这种设计模式并==不推荐用来实现redis分布式锁==。应该参考[the Redlock algorithm](http://redis.io/topics/distlock)的实现，因为这个方法只是复杂一点，但是却能保证更好的使用效果。
+>
+> 命令 `SET resource-name anystring NX EX max-lock-time` 是一种用 Redis 来实现锁机制的简单方法。
+>
+> 如果上述命令返回`OK`，那么客户端就可以获得锁（如果上述命令返回Nil，那么客户端可以在一段时间之后重新尝试），并且可以通过[DEL](http://www.redis.cn/commands/del.html)命令来释放锁。
+>
+> 客户端加锁之后，如果没有主动释放，会在过期时间之后自动释放。
+>
+> 可以通过如下优化使得上面的锁系统变得更加棒：
+>
+> * 不要设置固定的字符串，而是设置为随机的大字符串，可以称为token。
+> * 通过脚本删除指定锁的key，而不是[DEL](http://www.redis.cn/commands/del.html)命令。
+>
+> 上述优化方法会避免下述场景：a客户端获得的锁（键key）已经由于过期时间到了被redis服务器删除，但是这个时候a客户端还去执行[DEL](http://www.redis.cn/commands/del.html)命令。而b客户端已经在a设置的过期时间之后重新获取了这个同样key的锁，那么a执行[DEL](http://www.redis.cn/commands/del.html)就会释放了b客户端加好的锁。
+>
+> 解锁脚本的一个例子将类似于以下：
+>
+> ```
+> if redis.call("get",KEYS[1]) == ARGV[1]
+> then
+>     return redis.call("del",KEYS[1])
+> else
+>     return 0
+> end
+> ```
+>
+> 这个脚本执行方式如下：
+>
+> EVAL …script… 1 resource-name token-value
+
+#### （2）演进
+
+阶段一
+
+![Snip20201012_4](./images/Snip20201012_4.png)
+
+阶段二
+
+![Snip20201012_3](./images/Snip20201012_3.png)
+
+阶段三
+
+![Snip20201012_5](./images/Snip20201012_5.png)
+
+> 删锁的时候还有问题：若这个任务需要执行`30s`，而锁的有效期只有`10s`，占用锁的线程没有自动删除锁，而是锁它自己到期失效了，此时，其他的线程就自己跑进来了，但是原先正在执行任务的线程依然在继续执行，这样就相当于有多个线程同时执行操作数据库，原先的任务执行完之后，它就把锁删了，但是删除的是别人的锁，这下就又放进一个线程来操作数据库 
+>
+> 给锁自动续期：业务还没有执行完，锁就失效了
+
+```java
+    public TreeNode<CategoryEntity> treeNodeList() {
+
+        ValueOperations<String, String> ops = stringRedisTemplate.opsForValue();
+
+        TreeNode<CategoryEntity> result = getTreeNodeListFromCache(ops);
+
+        if (!ObjectUtils.isEmpty(result)) {
+            return result;
+        }
+
+        return writeToRedisWithDistributedLock(ops);
+    }
+
+
+    public static final String TREE_NODE_LIST_KEY = "treeNodeListKey";
+
+    public static final String TREE_NODE_LIST_LOCK = "treeNodeListLock";
+
+    /**
+     * 使用 redis 的分布式锁 来使得分布式应用只有一个去查询数据库，并将查询到的结果放入 redis
+     *
+     * @param ops
+     * @return
+     */
+    private TreeNode<CategoryEntity> writeToRedisWithDistributedLock(ValueOperations<String, String> ops) {
+
+        String uuid = UUID.randomUUID().toString();
+        /**
+         * 1、占领分布式锁
+         * 不存在该 key 的时候才能设置成功
+         * 通过第三步可以得知，占锁和设置过期时间，必须是一个原子操作（同步的），要放在一起
+         * */
+        Boolean treeNodeListLock = ops.setIfAbsent(TREE_NODE_LIST_LOCK, uuid, 10, TimeUnit.SECONDS);
+
+        TreeNode<CategoryEntity> result = null;
+
+        if (!ObjectUtils.isEmpty(treeNodeListLock) && treeNodeListLock) {
+
+            log.info("{}持有分布式锁",Thread.currentThread().getName());
+            /**
+             * 2、这个线程占用到redis了（加锁成功）
+             * */
+            try {
+
+                //stringRedisTemplate.expire("treeNodeListLock",10,TimeUnit.SECONDS); // 3、设置过期时间，这样还是一样的问题，如果在执行这行代码之前，断电了，就死锁了
+
+                result = queryCategoryAndSetIntoRedis(ops);
+
+            } finally {
+                /**
+                 * 防止死锁
+                 * 问题：但是如果，机器断电，锁还是删不掉
+                 * 添加判断锁的内容是不是自己放进去的，如果是自己的锁，就能放心删除
+                 * */
+                //if(uuid.equals(ops.get("treeNodeListLock"))){
+                /**
+                 *  删除我自己的锁，但是这两个操作不是原子操作，虽然确认到是我自己的锁，
+                 *  但是在发送删除操作之前，锁被更新成其他人的锁了，这样删掉的还是其他人的锁
+                 *  官方的解决方式 Lua 脚本解锁
+                 */
+                //   stringRedisTemplate.delete("treeNodeListLock");
+                //}
+                String luaScript = "if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end";
+
+                /**
+                 * 127.0.0.1:6379> del aa
+                 * (integer) 1
+                 * 127.0.0.1:6379> del aa
+                 * (integer) 0
+                 * redis 删除成功失败，都会返回 integer
+                 */
+                RedisScript<Long> script = new DefaultRedisScript<>(luaScript, Long.class); // integer 为 脚本返回的类型
+
+                /**
+                 * 使用 lua 脚本使得，查询和删除是一个原子操作
+                 *  lua 脚本中的 KEYS[1] 就是 Collections.singletonList("treeNodeListLock").get(0)
+                 *  lua 脚本中的 ARGV[1] 就是 uuid
+                 *
+                 *  如果使用 lettuce-core 执行脚本的时候，还会报异常，所以还是切回 jedis
+                 * */
+                stringRedisTemplate.execute(script, Collections.singletonList(TREE_NODE_LIST_LOCK), uuid);
+            }
+            return result;
+        } else {
+            /**
+             * 加锁失败，要重试
+             * */
+/*            do { // 这样，如果拿到锁的线程断电了，如果没有新线程来获取锁，这样所有的 while 中，将没有线程去顶替，会直到栈溢出
+                result = getTreeNodeListFromCache(ops);
+
+                System.out.println(Thread.currentThread().getName() + "自旋等待结果");
+
+                try {
+                    TimeUnit.MILLISECONDS.sleep(100);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+
+            } while (ObjectUtils.isEmpty(result));*/
+
+            //log.info("{}自旋",Thread.currentThread().getName());
+
+            // 不睡觉，就是想栈溢出
+            try {
+                TimeUnit.SECONDS.sleep(1);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            /**
+             * 加锁失败，自旋，注意自旋调用的不是本方法，而是在本方法的基础上还要查一遍 redis 查看是否有数据
+             * 所以就调用父方法，它刚好执行了这个步骤，
+             * 而不是上来就去抢占锁
+             * */
+            return treeNodeList(); 
+        }
+    }
+```
+
+### 9.基于redis的分布式锁框架
+
+> https://redis.io/topics/distlock
+>
+> Java 实现 Redisson https://github.com/redisson/redisson
+>
+> 还能对锁进行自动续期
+
+#### （1）整合remission作为分布式锁的功能框架
+
+1、添加依赖
+
+```xml
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson</artifactId>
+            <version>3.13.5</version>
+        </dependency>
+```
+
+2、放入`IOC`容器
+
+```java
+    /**
+     * 单节点模式
+     * */
+    @Bean(destroyMethod="shutdown")
+    public RedissonClient redisson(){
+
+        Config config = new Config();
+        /**
+         * 要标注协议
+         * */
+        config.useSingleServer().setAddress("redis://localhost:6379");
+
+        log.info("正在配置 Redisson");
+        return Redisson.create(config);
+    }
+```
+
+
+
+#### （2）自动续期源码
+
+> ```java
+>         RLock lock = redissonClient.getLock("hello-lock");
+> 
+>         /**
+>          * 1、如果我们未指定锁的超时时间，就使用 看门狗默认时间 30s commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout();
+>          * 只要占锁成功就会启动一个定时任务【重新给锁设置过期时间，锁的过期时间就是看门狗的默认时间】
+>          * */
+>         lock.lock(); // 阻塞式等待，默认锁的续期时间是 30s。
+>         /**
+>          * 2、当自定义锁的时间之后，看门狗将不会自动续期锁的时间，所以，自动解锁的时间一定要大于业务的执行时间
+>          * 如果我们传递了锁的超时时间，就发送给 redis
+>          * 10s 执行一次续期
+>          * */
+> //         lock.lock(10,TimeUnit.SECONDS);
+> ```
+
+```java
+
+public class RedissonLock extends RedissonExpirable implements RLock { 
+  
+      private RFuture<Boolean> tryAcquireOnceAsync(long waitTime, long leaseTime, TimeUnit unit, long threadId) {
+        if (leaseTime != -1) {
+            return tryLockInnerAsync(waitTime, leaseTime, unit, threadId, RedisCommands.EVAL_NULL_BOOLEAN); // 用户设置了锁的超时时间，会执行
+        }
+        
+        // 用户没有指定超时时间，使用看门狗的时间，返回 Future 接口的实现类
+        RFuture<Boolean> ttlRemainingFuture = tryLockInnerAsync(waitTime,
+                                                    commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout(),//超时时间就使用看门狗； lockWatchdogTimeout = 30 * 1000; 
+                                                    TimeUnit.MILLISECONDS, threadId, RedisCommands.EVAL_NULL_BOOLEAN);
+        // 当 Future 任务占用到锁的时候 触发这个方法
+        ttlRemainingFuture.onComplete((ttlRemaining, e) -> {
+            if (e != null) {
+                return;
+            }
+
+            // lock acquired
+            if (ttlRemaining) {
+              // 获得锁，开始调度
+                scheduleExpirationRenewal(threadId);
+            }
+        });
+        return ttlRemainingFuture;
+    }
+  
+      private void scheduleExpirationRenewal(long threadId) {
+        ExpirationEntry entry = new ExpirationEntry();
+        ExpirationEntry oldEntry = EXPIRATION_RENEWAL_MAP.putIfAbsent(getEntryName(), entry);
+        if (oldEntry != null) {
+            oldEntry.addThreadId(threadId);
+        } else {
+            entry.addThreadId(threadId);
+            renewExpiration(); //更新过期时间
+        }
+    }
+  
+      private void renewExpiration() {
+        ExpirationEntry ee = EXPIRATION_RENEWAL_MAP.get(getEntryName());
+        if (ee == null) {
+            return;
+        }
+        
+        Timeout task = commandExecutor.getConnectionManager().newTimeout(new TimerTask() {
+            @Override
+            public void run(Timeout timeout) throws Exception {
+                ExpirationEntry ent = EXPIRATION_RENEWAL_MAP.get(getEntryName());
+                if (ent == null) {
+                    return;
+                }
+                Long threadId = ent.getFirstThreadId();
+                if (threadId == null) {
+                    return;
+                }
+                
+                RFuture<Boolean> future = renewExpirationAsync(threadId);//看这里,创建续期任务
+                future.onComplete((res, e) -> {
+                    if (e != null) {
+                        log.error("Can't update lock " + getName() + " expiration", e);
+                        return;
+                    }
+                    
+                    if (res) {
+                        // reschedule itself
+                        renewExpiration(); //续期之后，继续调用自己来继续续期
+                    }
+                });
+            }
+        }, internalLockLeaseTime / 3, TimeUnit.MILLISECONDS);
+        // internalLockLeaseTime / 3 之后，执行续期任务，看门狗时间的1/3，也就是10秒之后执行
+        ee.setTimeout(task);
+    }
+  
+      protected RFuture<Boolean> renewExpirationAsync(long threadId) {
+        return evalWriteAsync(getName(), LongCodec.INSTANCE, RedisCommands.EVAL_BOOLEAN,
+                "if (redis.call('hexists', KEYS[1], ARGV[2]) == 1) then " +
+                        "redis.call('pexpire', KEYS[1], ARGV[1]); " +
+                        "return 1; " +
+                        "end; " +
+                        "return 0;",
+                Collections.singletonList(getName()),
+                internalLockLeaseTime, getLockName(threadId));
+        // 更新的超时时间 internalLockLeaseTime
+        // 在构造器中         this.internalLockLeaseTime = commandExecutor.getConnectionManager().getCfg().getLockWatchdogTimeout();
+				//又是看门狗时间
+    }
+  
+  
+  // 无论用户有没有设置过期时间，底层最终都调用这个方法
+<T> RFuture<T> tryLockInnerAsync(long waitTime, long leaseTime, TimeUnit unit, long threadId, RedisStrictCommand<T> command) {
+        internalLockLeaseTime = unit.toMillis(leaseTime);
+
+        return evalWriteAsync(getName(), LongCodec.INSTANCE, command,
+                "if (redis.call('exists', KEYS[1]) == 0) then " +
+                        "redis.call('hincrby', KEYS[1], ARGV[2], 1); " +
+                        "redis.call('pexpire', KEYS[1], ARGV[1]); " +
+                        "return nil; " +
+                        "end; " +
+                        "if (redis.call('hexists', KEYS[1], ARGV[2]) == 1) then " +
+                        "redis.call('hincrby', KEYS[1], ARGV[2], 1); " +
+                        "redis.call('pexpire', KEYS[1], ARGV[1]); " +
+                        "return nil; " +
+                        "end; " +
+                        "return redis.call('pttl', KEYS[1]);",
+                Collections.singletonList(getName()), internalLockLeaseTime, getLockName(threadId));
+    }
+}
+```
+
+
+
+![Snip20201012_6](./images/Snip20201012_6.png)
+
+#### （3）读写锁
+
+```java
+ /**
+     * 测试读写锁
+     * 这里是写锁
+     * 1、读写锁保证能读取到最新的数据，修改期间，写锁是一个排他锁（互斥锁，独享锁）。
+     * 读锁是一个共享锁
+     * 写锁没有释放，读锁就必须等待
+     * 2、如果是读先占用到锁，那么写锁也必须等待读锁释放，才能进行写操作
+     *
+     * 读+读：相当于无锁，并发读，只会在redis中记录好，所有当前的读锁。他们都会同时加锁成功
+     * 写+读：写锁没有释放，读锁就必须等待
+     * 写+写：阻塞方式
+     * 读+写：读锁没有释放，写锁必须等待
+     *
+     * 总结：只要有写锁的存在，读写都必须等待
+     * @param content
+     * @return
+     */
+    @GetMapping("/write/{content}")
+    public R write(@PathVariable("content") String content) {
+
+        RReadWriteLock readWriteLock = redissonClient.getReadWriteLock("test-read-write-lock");
+
+        RLock rLock = readWriteLock.writeLock();
+
+        rLock.lock();
+        try {
+
+            try { TimeUnit.SECONDS.sleep(10); } catch (InterruptedException e) { e.printStackTrace(); }
+            stringRedisTemplate.opsForValue().set("temp-content", content);
+
+        } finally {
+            rLock.unlock();
+        }
+
+        return R.ok();
+    }
+
+    /**
+     * 测试读写锁
+     * 这里是写锁
+     * @return
+     */
+    @GetMapping("/read")
+    public R read() {
+
+        RReadWriteLock readWriteLock = redissonClient.getReadWriteLock("test-read-write-lock");
+
+        RLock rLock = readWriteLock.readLock();
+
+        rLock.lock();
+
+        String s = null;
+        try {
+
+            s = stringRedisTemplate.opsForValue().get("temp-content");
+
+        } finally {
+            rLock.unlock();
+        }
+
+        return R.ok().put("data", s);
+    }
+
+```
+
+#### （3）闭锁
+
+```java
+    /**
+     * 模拟闭锁
+     * */
+    @GetMapping("/lockDoor")
+    public String lockDoor() throws InterruptedException {
+        RCountDownLatch countDownLatch = redissonClient.getCountDownLatch("lock-door");
+
+        countDownLatch.trySetCount(5);
+
+        countDownLatch.await();
+
+        return "锁门了，走人了，放假了";
+    }
+
+    @GetMapping("/gogogo/{clazz}")
+    public String gogogo(@PathVariable("clazz")String clazz){
+
+        RCountDownLatch countDownLatch = redissonClient.getCountDownLatch("lock-door");
+
+        countDownLatch.countDown();
+
+        return clazz+"班走人了";
+    }
+```
+
+### 10.缓存中的数据和数据库保持一致
+
+#### （1）双写模式
+
+![Snip20201012_7](./images/Snip20201012_7.png)
+
+> 解决方式：加锁，只允许一个用户同时更新数据库和缓存
+>
+> 如果设置了缓存的过期时间，那么这就是暂时性的脏数据问题
+
+#### （2）失效模式
+
+![Snip20201012_8](./images/Snip20201012_8.png)
+
+> 缓存的所有数据都有过期时间，数据过期，下一次查询触发主动更新
+>
+> 读写数据的时候，加上分布式读写锁
+>
+> 缺点：不适合经常读，经常写
+
+#### （3）缓存数据一致性-解决方案
+
+无论是`双写模式`还是`失效模式`，都会导致缓存不一致的问题，即多个实例同时更新会出问题，怎么办？
+
+1、如果用户纬度的数据（订单数据、用户数据、个人信息、签名），这种并发的几率非常小，不用考虑这个问题，缓存数据加上过期时间，每隔一段时间触发读取的主动更新即可
+
+2、如果是菜单，商品介绍等基础数据，也可以去使用`canal`订阅`binlog`的方式
+
+3、缓存数据+过期时间也足够解决大部分业务对于缓存的要求
+
+4、通过加锁保证并发读写，写写的时候按顺序排好队。读读无所谓。所以适合使用**读写锁**（业务不关心脏数据，允许临时脏数据可以忽略）
+
+总结：
+
+1、我们能放入缓存的数据就不应该是实时性、一致性要求超高的，所以缓存数据的时候加上过期时间，保证每天拿到当前最新的数据即可
+
+2、我们不应该过度设计，增加系统的复杂性
+
+4、遇到实时性、一致性要求超高的数据，就应该查数据库，即使慢一点
+
+#### （4）缓存一致性解决-canal方案
+
+![Snip20201012_2](./images/Snip20201012_2.png)
+
+### 11.spring cache
+
+> https://docs.spring.io/spring-integration/docs/5.3.2.RELEASE/reference/html/redis.html#redis
+>
+> api位于 spring-integration 下 的  cache-support
+
+```java
+		// 千万不要这样定义，100%报错
+		@Resource
+    RedisTemplate<String,List<BrandEntity>> redisEntityTemplate;
+```
+
+
+
+#### （1）简介
+
+`spring`从`3.1`开始定义了`org.springframework.cache.Cache`和`org.springframework.cache.CacheManager`接口来统一不同的缓存技术。并且支持使用`JCache(JSR-107)`注解简化我们的开发
+
+`Cache`接口为缓存的组件规范定义，包含缓存的各种操作集合。`Cache`接口下`spring`提供了各种`xxxCache`的实现。如`RedisCache`、`EhCacheCache`、`ConcurrentMapCache`等
+
+每次调用需要缓存功能的方法时，`spring`会检查指定参数的指定目标方法是否已经被调用过；如果有就直接从缓存中获取方法调用后的结果，如果没有就调用该方法并缓存结果后，返回给用户，下次调用直接从缓存中获取
+
+使用`spring`缓存抽象时我们要关注以下亮点
+
+1、确定方法需要被缓存以及他们的缓存策略
+
+2、从缓存中读取之前缓存存储的数据
+
+#### （2）源码
+
+1、`CacheManager`接口
+
+```java
+public interface CacheManager {
+
+	/**
+	 * Get the cache associated with the given name.
+	 * <p>Note that the cache may be lazily created at runtime if the
+	 * native provider supports it.
+	 * @param name the cache identifier (must not be {@code null})
+	 * @return the associated cache, or {@code null} if such a cache
+	 * does not exist or could be not created
+	 */
+	@Nullable
+	Cache getCache(String name);
+
+	/**
+	 * Get a collection of the cache names known by this manager.
+	 * @return the names of all caches known by the cache manager
+	 */
+	Collection<String> getCacheNames();
+
+} 
+```
+
+2、常用的`CacheManager`接口实现类`ConcurrentMapCacheManager`
+
+```java
+public class ConcurrentMapCacheManager implements CacheManager, BeanClassLoaderAware {
+
+	private final ConcurrentMap<String, Cache> cacheMap = new ConcurrentHashMap<>(16);
+  
+  	/**
+	 * Construct a static ConcurrentMapCacheManager,
+	 * managing caches for the specified cache names only.
+	 */
+	public ConcurrentMapCacheManager(String... cacheNames) {
+		setCacheNames(Arrays.asList(cacheNames));
+	}
+
+
+	/**
+	 * Specify the set of cache names for this CacheManager's 'static' mode.
+	 * <p>The number of caches and their names will be fixed after a call to this method,
+	 * with no creation of further cache regions at runtime.
+	 * <p>Calling this with a {@code null} collection argument resets the
+	 * mode to 'dynamic', allowing for further creation of caches again.
+	 */
+	public void setCacheNames(@Nullable Collection<String> cacheNames) {
+		if (cacheNames != null) {
+			for (String name : cacheNames) {
+				this.cacheMap.put(name, createConcurrentMapCache(name));
+			}
+			this.dynamic = false;
+		}
+		else {
+			this.dynamic = true;
+		}
+	}
+  
+  	/**
+	 * Create a new ConcurrentMapCache instance for the specified cache name.
+	 * @param name the name of the cache
+	 * @return the ConcurrentMapCache (or a decorator thereof)
+	 */
+	protected Cache createConcurrentMapCache(String name) {
+		SerializationDelegate actualSerialization = (isStoreByValue() ? this.serialization : null);
+		return new ConcurrentMapCache(name, new ConcurrentHashMap<>(256), isAllowNullValues(), actualSerialization);
+	}
+}
+```
+
+#### （3）自动配置源码
+
+```java
+public class CacheAutoConfiguration {
+  
+  // 选择使用哪一个缓存管理器
+  	static class CacheConfigurationImportSelector implements ImportSelector {
+
+		@Override
+		public String[] selectImports(AnnotationMetadata importingClassMetadata) {
+			CacheType[] types = CacheType.values();
+			String[] imports = new String[types.length];
+			for (int i = 0; i < types.length; i++) {
+        // 得到每一种类型的缓存
+				imports[i] = CacheConfigurations.getConfigurationClass(types[i]);
+			}
+			return imports;
+		}
+
+	}
+}
+```
+
+映射缓存种类
+
+```java
+final class CacheConfigurations {
+
+	private static final Map<CacheType, Class<?>> MAPPINGS;
+
+	static {
+		Map<CacheType, Class<?>> mappings = new EnumMap<>(CacheType.class);
+		mappings.put(CacheType.GENERIC, GenericCacheConfiguration.class);
+		mappings.put(CacheType.EHCACHE, EhCacheCacheConfiguration.class);
+		mappings.put(CacheType.HAZELCAST, HazelcastCacheConfiguration.class);
+		mappings.put(CacheType.INFINISPAN, InfinispanCacheConfiguration.class);
+		mappings.put(CacheType.JCACHE, JCacheCacheConfiguration.class);
+		mappings.put(CacheType.COUCHBASE, CouchbaseCacheConfiguration.class);
+		mappings.put(CacheType.REDIS, RedisCacheConfiguration.class); //导入了redis的配置
+		mappings.put(CacheType.CAFFEINE, CaffeineCacheConfiguration.class);
+		mappings.put(CacheType.SIMPLE, SimpleCacheConfiguration.class);
+		mappings.put(CacheType.NONE, NoOpCacheConfiguration.class);
+		MAPPINGS = Collections.unmodifiableMap(mappings);
+	}
+
+	private CacheConfigurations() {
+	}
+
+	static String getConfigurationClass(CacheType cacheType) {
+    // 获取到缓存类型的映射
+		Class<?> configurationClass = MAPPINGS.get(cacheType);
+		Assert.state(configurationClass != null, () -> "Unknown cache type " + cacheType);
+		return configurationClass.getName();
+	}
+}
+```
+
+`redis`缓存配置类
+
+```java
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnClass(RedisConnectionFactory.class)
+@AutoConfigureAfter(RedisAutoConfiguration.class)
+@ConditionalOnBean(RedisConnectionFactory.class)
+@ConditionalOnMissingBean(CacheManager.class)
+@Conditional(CacheCondition.class)
+class RedisCacheConfiguration {
+  
+  // 接收下面创建的RedisCacheConfiguration，然后创建RedisCacheManager，并放入IOC
+  	@Bean
+	RedisCacheManager cacheManager(CacheProperties cacheProperties, CacheManagerCustomizers cacheManagerCustomizers,
+			ObjectProvider<org.springframework.data.redis.cache.RedisCacheConfiguration> redisCacheConfiguration,
+			ObjectProvider<RedisCacheManagerBuilderCustomizer> redisCacheManagerBuilderCustomizers,
+			RedisConnectionFactory redisConnectionFactory, ResourceLoader resourceLoader) {
+		RedisCacheManagerBuilder builder = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(
+      // determineConfiguration()决定redis的缓存配置
+				determineConfiguration(cacheProperties, redisCacheConfiguration,        resourceLoader.getClassLoader()));
+		List<String> cacheNames = cacheProperties.getCacheNames();
+		if (!cacheNames.isEmpty()) {
+			builder.initialCacheNames(new LinkedHashSet<>(cacheNames)); // 初始化缓存
+		}
+		redisCacheManagerBuilderCustomizers.orderedStream().forEach((customizer) -> customizer.customize(builder));
+		return cacheManagerCustomizers.customize(builder.build());
+	}
+  
+  	// 决定redis的缓存配置，返回的结果，最终会被上边的 @Bean 接收
+  	private org.springframework.data.redis.cache.RedisCacheConfiguration determineConfiguration(
+			CacheProperties cacheProperties,
+ObjectProvider<org.springframework.data.redis.cache.RedisCacheConfiguration> redisCacheConfiguration,
+			ClassLoader classLoader) {
+      // 决定哪一个缓存用什么配置，没有的话，就使用默认规则
+		return redisCacheConfiguration.getIfAvailable(() -> createConfiguration(cacheProperties, classLoader));
+	}
+  
+  	/*
+  	* 重点：这里定义了缓存的规则（默认规则）
+  	*/
+  	private org.springframework.data.redis.cache.RedisCacheConfiguration createConfiguration(
+			CacheProperties cacheProperties, ClassLoader classLoader) {
+		Redis redisProperties = cacheProperties.getRedis();
+      
+		org.springframework.data.redis.cache.RedisCacheConfiguration config = org.springframework.data.redis.cache.RedisCacheConfiguration
+				.defaultCacheConfig(); // 会使用默认的缓存配置
+      
+		config = config.serializeValuesWith(
+				SerializationPair.fromSerializer(new JdkSerializationRedisSerializer(classLoader))); // 默认使用JDK作为序列化机制
+      
+      // 应用 ymal 中的缓存配置
+		if (redisProperties.getTimeToLive() != null) {
+			config = config.entryTtl(redisProperties.getTimeToLive()); //设置ttl过期时间
+		}
+		if (redisProperties.getKeyPrefix() != null) {
+			config = config.prefixKeysWith(redisProperties.getKeyPrefix());
+		}
+		if (!redisProperties.isCacheNullValues()) {
+			config = config.disableCachingNullValues();
+		}
+		if (!redisProperties.isUseKeyPrefix()) {
+			config = config.disableKeyPrefix();
+		}
+		return config;
+	}
+}
+```
+
+> 所以，只需要给容器中放入一个`RedisCacheConfiguration`，即可，就会应用到当前的`RedisCacheManager`所管理的所有缓存分区中
+
+```java
+public class RedisCacheManager extends AbstractTransactionSupportingCacheManager {
+
+ 		/** 初始化缓存
+		 * Append a {@link Set} of cache names to be pre initialized with current {@link RedisCacheConfiguration}.
+		 * <strong>NOTE:</strong> This calls depends on {@link #cacheDefaults(RedisCacheConfiguration)} using whatever
+		 * default {@link RedisCacheConfiguration} is present at the time of invoking this method.
+		 *
+		 * @param cacheNames must not be {@literal null}.
+		 * @return this {@link RedisCacheManagerBuilder}.
+		 */
+		public RedisCacheManagerBuilder initialCacheNames(Set<String> cacheNames) {
+
+			Assert.notNull(cacheNames, "CacheNames must not be null!");
+
+      // 遍历每一个缓存名字，将缓存名和默认配置放到一起
+			cacheNames.forEach(it -> withCacheConfiguration(it, defaultCacheConfiguration));
+			return this;
+		} 
+  
+  		public RedisCacheManagerBuilder withCacheConfiguration(String cacheName,
+				RedisCacheConfiguration cacheConfiguration) {
+      // 最终放入到 initialCaches 中
+			this.initialCaches.put(cacheName, cacheConfiguration);
+			return this;
+		}
+  
+  		/** 
+		 * Create new instance of {@link RedisCacheManager} with configuration options applied.
+		 *
+		 * @return new instance of {@link RedisCacheManager}.
+		 */
+		public RedisCacheManager build() {
+			// 最终的创建 RedisCacheManager 来完成初始化
+			RedisCacheManager cm = new RedisCacheManager(cacheWriter, defaultCacheConfiguration, initialCaches,
+					allowInFlightCacheCreation);
+
+			cm.setTransactionAware(enableTransactions);
+
+			return cm;
+		}
+}
+```
+
+#### （4）整合spring cache 简化缓存开发
+
+1、引入依赖
+
+```xml
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+```
+
+2、配置使用redis作为缓存
+
+```yml
+spring:
+  cache:
+    type: redis
+```
+
+3、开启缓存功能
+
+```java
+@EnableCaching
+```
+
+#### （5）缓存的默认行为
+
+1、缓存的`key`自动生成，缓存的名字 `::SimpleKey []`，自动生成`key`的值
+
+2、缓存的`value`的值，默认使用`jdk`序列化机制，将序列化后的数据保存在`redis`中
+
+3、默认`ttl`时间是`-1`
+
+#### （6）自定义行为
+
+1、指定生成的缓存使用的`key`：使用注解的`key`属性来指定，支持`spel`表达式
+
+```java
+
+    private static final String TREE_CATEGORY_LIST_CACHE_KEY = "'treeCategoryList'";
+
+    private static final String CATEGORY = "product-category";
+
+		@Cacheable(cacheNames = CATEGORY,key = "'threeNodeListTest'")
+		// 查询方法
+
+    @Cacheable(cacheNames = CATEGORY, key = TREE_CATEGORY_LIST_CACHE_KEY)
+		// 查询方法
+
+    /**
+     * 1、同时进行多种缓存操作
+     * 2、指定删除某个分区下的所有数据，@CacheEvict(cacheNames = CATEGORY,allEntries = true)
+     * 3、一个缓存分区存储同一类型的数据，分区名就当作缓存的前缀，方便删除缓存分区
+     * @param category
+     */
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CATEGORY,allEntries = true)
+    })
+		// 更新方法 
+```
+
+2、指定缓存的过期时间
+
+```yml
+spring:
+  cache:
+    type: redis
+    redis:
+      time-to-live: 360000 # 单位是毫秒
+      use-key-prefix: true # 一旦设置为 false， spring-cache 也不会使用 缓存名字::key 的形式（极度不建议关闭）
+      #      key-prefix: Cache_  # 缓存key使用前缀，不建议自定义前缀。spring-cache 前缀直接使用缓存的名字，key作为缓存的 key，即在redis中存储的形式为 缓存名字::key
+      cache-null-values: true # 缓存 null 值，避免缓存穿透
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    database: 2
+```
+
+3、将缓存的数据保存为`json`
+
+> 使用`StringRedisTemplate`操作缓存时，如果已经手动序列化为字符串，那么这里配置的序列化器将不会生效
+
+```java
+     /**
+     * @ConditionalOnClass(CacheManager.class)
+     * @ConditionalOnBean(CacheAspectSupport.class)
+     * @ConditionalOnMissingBean(value = CacheManager.class, name = "cacheResolver")
+     * @EnableConfigurationProperties(CacheProperties.class) 已经帮我们创建了 CacheProperties，所以可以直接拿来用
+     * public class CacheAutoConfiguration {
+     *
+     * @param cacheProperties
+     * @return
+     */
+    @Bean
+    public RedisCacheConfiguration redisCacheConfiguration(CacheProperties cacheProperties) {
+
+        RedisCacheConfiguration config = RedisCacheConfiguration.defaultCacheConfig();
+        
+        /**
+         * 只能在已有的配置基础上修改，修改之后返回的是新的对象，需要将原有的对象覆盖（源码中也是这么配置的）
+         * 后面还会从 yaml 中读取配置，就将这里注释了
+         * */
+        /*Duration duration = Duration.ofSeconds(60);
+        config = config.entryTtl(duration);*/
+
+        /**
+         * 配置key的序列化
+         * */
+        RedisSerializer<String> stringRedisSerializer = new StringRedisSerializer();
+
+        RedisSerializationContext.SerializationPair<String> serializationPairForKey = RedisSerializationContext.SerializationPair.fromSerializer(stringRedisSerializer);
+
+        config = config.serializeKeysWith(serializationPairForKey);
+
+        /**
+         * 配置value的序列化
+         * */
+/*
+        不建议使用，因为要为每一个序列化对象都指定一个序列化方式
+        // 使用jackson作为value的序列化器 但是只支持一种类型，这里只支持 CategoryEntity 类
+
+        RedisSerializer<CategoryEntity> fastJsonRedisSerializer = new Jackson2JsonRedisSerializer<>(CategoryEntity.class);
+
+        RedisSerializationContext.SerializationPair<CategoryEntity> serializationPairForValueByJackson = RedisSerializationContext.SerializationPair.fromSerializer(fastJsonRedisSerializer);
+*/
+
+        // 使用 范型的序列化器可以支持所有对象的序列化 (阿里的fast实现)，原理是在json中存放一份序列化之前，对象的全限定的路径
+        RedisSerializer<Object> genericFastJsonRedisSerializer = new GenericFastJsonRedisSerializer();
+
+        RedisSerializationContext.SerializationPair<Object> serializationPair = RedisSerializationContext.SerializationPair.fromSerializer(genericFastJsonRedisSerializer);
+
+        // 支持范型的序列化器 （jackson实现），jackson序列化时，调用get() set()方法来进行序列化，无论该属性是否有值，都一并调用 set() get() 进行序列化与反序列化
+        RedisSerializer<Object> genericJackson2JsonRedisSerializer = new GenericJackson2JsonRedisSerializer();
+
+        RedisSerializationContext.SerializationPair<Object> serializationPairForGenericValueByJackson = RedisSerializationContext.SerializationPair.fromSerializer(genericJackson2JsonRedisSerializer);
+
+        config = config.serializeValuesWith(serializationPair);
+
+        /**
+         * 读取 ymal 文件中的配置，以 spring.cache 开头
+         * */
+        CacheProperties.Redis redisProperties = cacheProperties.getRedis();
+
+        // 以 spring.cache.redis 开头
+        if (redisProperties.getTimeToLive() != null) {
+            config = config.entryTtl(redisProperties.getTimeToLive());
+        }
+        if (redisProperties.getKeyPrefix() != null) {
+            config = config.prefixKeysWith(redisProperties.getKeyPrefix());
+        }
+        if (!redisProperties.isCacheNullValues()) {
+            config = config.disableCachingNullValues();
+        }
+        if (!redisProperties.isUseKeyPrefix()) {
+            config = config.disableKeyPrefix();
+        }
+
+        log.info("redis配置完成。。");
+
+        return config;
+    }
+```
+
+4、例举实体类
+
+```java
+@Data
+@TableName("pms_category")
+public class CategoryEntity implements Serializable, ParentAndChildren<Long> {
+	private static final long serialVersionUID = 1L;
+
+	/**
+	 * 分类id
+	 */
+	@TableId
+	private Long catId;
+	/**
+	 * 分类名称
+	 */
+	private String name;
+
+//	@JsonIgnore  jackson 将这个对象序列化到 redis 中时，会调用这两个方法，因此 redis 中会多出 id、parentId，
+//	但是反序列化的时候找不到对应的setParent() setId()，所以造成反序列化失败，但是也不能将 getId(),getParentId()注释，因为前端要用
+//	最简单的是再写 setId() 和 setParentId() 两个方法，方法不做任何处理
+
+//	而 FastJson 就不会有这么多事情，它只序列化对象中属性不为 Empty 的属性，其他为 Empty的属性，就不进行序列化与反序列化
+	@Override
+	public Long getId() {
+		return this.catId;
+	}
+
+//	@JsonIgnore
+	@Override
+	public Long getParentId() {
+		return this.parentCid;
+	}
+
+	/**
+	 * 当这个list中的元素为空的时候，就不进行json化
+	 * */
+	@JsonInclude(JsonInclude.Include.NON_EMPTY)
+	@TableField(exist = false)
+	private List<CategoryEntity> children;
+
+```
+
+#### （7）spring-cache的不足
+
+1、读模式
+
+【1】缓存穿透：大量查询一个空数据，查询落在数据库上。
+
+​		解决：
+
+```yml
+spring:
+	cache:	
+    type: redis
+    redis:
+		cache-null-values: true # 缓存 null 值，避免缓存穿透
+```
+
+【2】缓存击穿：大量并发进来，同时查询一个正好过期的数据。解决，加锁（本地锁、分布式锁）
+
+==spring-cache 写cache的时候默认没有加锁==
+
+**需要通过在缓存注解中加上**`@Cacheable(cacheNames = "xx", key = "'xx'",sync = true) `来加锁（本地锁）解决击穿
+
+【3】缓存雪崩：大量的key同时过期
+
+​		解决：加随机时间
+
+	注意：容易弄巧成拙，a缓存过期时间`2s`，b缓存过期时间`3s`，a缓存加上随机时间`2s`,b缓存加上随机时间`1s`，这样，本来缓存不同时过期，现在变得同时过期了
+
+2、写模式（保证缓存与数据库一致）
+
+【1】加读写锁
+
+【2】引入中间件`canal`，感知`mysql`的更新从而更新缓存
+
+【3】读多，写多的建议直接操作数据库
+
+3、总结
+
+常规数据（读多，写少），及时性、一致性要求不高的数据：完全可以使用`spring cache`
+
+常规数据的写模式（只要缓存的数据有过期时间就可以了）
+
+特殊数据就要特殊设计
+
+4、`RedisCache`
+
+```java
+@Cacheable(cacheNames = CATEGORY, key = TREE_CATEGORY_LIST_CACHE_KEY,sync = true) 
+sync = true 的时候会调用 加锁的 get()方法
+sync = false 的时候会调用 不加锁的 lookup() 方法
+```
+
+
+
+```java
+public class RedisCache extends AbstractValueAdaptingCache {
+
+  //@Cacheable(cacheNames = CATEGORY, key = TREE_CATEGORY_LIST_CACHE_KEY,sync = false) 时调用(sync = false)  
+  	protected Object lookup(Object key) {
+
+		byte[] value = cacheWriter.get(name, createAndConvertCacheKey(key));
+
+		if (value == null) {
+			return null;
+		}
+
+		return deserializeCacheValue(value);
+	}
+  
+  //@Cacheable(cacheNames = CATEGORY, key = TREE_CATEGORY_LIST_CACHE_KEY,sync = true) 时调用(sync = true)  
+  // 从缓存中获取缓存的时候会加锁，而且不是分布式锁
+  	@SuppressWarnings("unchecked")
+	public synchronized <T> T get(Object key, Callable<T> valueLoader) {
+
+		ValueWrapper result = get(key);
+
+		if (result != null) {
+			return (T) result.get();
+		}
+
+		T value = valueFromLoader(key, valueLoader);
+		put(key, value);
+		return value;
+	}
+  
+  // 加锁的 get()方法最终会调用这个方法将获取到的数据写入 redis，但是这个方法没有加锁
+  	public void put(Object key, @Nullable Object value) {
+
+		Object cacheValue = preProcessCacheValue(value);
+
+		if (!isAllowNullValues() && cacheValue == null) {
+
+			throw new IllegalArgumentException(String.format(
+					"Cache '%s' does not allow 'null' values. Avoid storing null via '@Cacheable(unless=\"#result == null\")' or configure RedisCache to allow 'null' via RedisCacheConfiguration.",
+					name));
+		}
+
+		cacheWriter.put(name, createAndConvertCacheKey(key), serializeCacheValue(cacheValue), cacheConfig.getTtl());
+	}
+}
+```
+
+
+
+## 五、search服务
+
+![Snip20201013_1](./images/Snip20201013_1.png)
+
+
+
+
+
+## 六、认证服务
+
+### 1.MD5加密算法
+
+`Message Digest Algorithm 5`信息摘要算法
+
+* 压缩性：任意长度的数据，计算出的`MD5`值的长度都是固定的
+* 容易计算：从原数据计算出`MD5`很容易
+* 抗修改性：对原数据进行任何改动，哪怕只要修改一字节，所得到的`MD5`的值都有很大区别
+* 强抗碰撞：想找到两个不同的数据，使他们具有相同的`MD5`值是非常困难的
+* 不可逆
+
+`MD5`不能直接用于加密密码：因为会被暴力破解
+
+### 2.加盐
+
+通过生成随机数与`MD5`生成字符串进行组合
+
+数据库同时存储`MD5`与其`salt`值，验证正确性时，使用`salt`进行`MD5`即可
+
+### 3.测试
+
+```xml
+<!-- https://mvnrepository.com/artifact/commons-codec/commons-codec 
+		包含诸多加密算法
+-->
+<dependency>
+    <groupId>commons-codec</groupId>
+    <artifactId>commons-codec</artifactId>
+    <version>1.15</version>
+</dependency>
+
+```
+
+### 4.OAuth 2.0 流程
+
+![Snip20201019_9](./images/Snip20201019_9.png)
+
+![Snip20201019_1](./images/Snip20201019_1.png)
+
+### 5.微博登陆
+
+> 接口文档：https://open.weibo.com/wiki/Connect/login
+
+#### （1）将用户引导到这个URL
+
+> 注意：将第一次微博返回的`token`直接返回到浏览器，不安全，`redirect_uri`应该重定向到后端认证服务器地址
+
+![Snip20201019_3](./images/Snip20201019_3.png)
+
+![Snip20201019_4](./images/Snip20201019_4.png)
+
+```html
+<a href="https://api.weibo.com/oauth2/authorize?client_id=3559846215&response_type=code&redirect_uri=http://guli.com/index.html">
+
+```
+
+#### （2）修改登录后的授权回调页为自己的认证服务器
+
+![Snip20201019_6](./images/Snip20201019_6.png)
+
+
+
+#### （3）换取accessToken
+
+使用`token`（认证后返回的`code`）换取`accessToken`，`code`只能用一次，用完之后就失效
+
+同一个用户，一段时间内，`accessToken`都不会变化，即使多次获取
+
+1、官方文档
+
+https://api.weibo.com/oauth2/access_token
+
+HTTP请求方式
+
+POST
+请求参数
+
+|               | 必选 | 类型及范围 |                说明                |
+| :-----------: | :--: | :--------: | :--------------------------------: |
+|   client_id   | true |   string   |      申请应用时分配的AppKey。      |
+| client_secret | true |   string   |    申请应用时分配的AppSecret。     |
+|  grant_type   | true |   string   | 请求的类型，填写authorization_code |
+
+* **grant_type为authorization_code时**
+
+|              | 必选 | 类型及范围 |                    说明                    |
+| :----------: | :--: | :--------: | :----------------------------------------: |
+|     code     | true |   string   |        调用authorize获得的code值。         |
+| redirect_uri | true |   string   | 回调地址，需需与注册应用里的回调地址一致。 |
+
+返回数据
+
+```json
+ {
+       "access_token": "ACCESS_TOKEN",
+       "expires_in": 1234,
+       "remind_in":"798114",
+       "uid":"12341234"
+ }
+```
+
+
+
+| 返回值字段   | 字段类型 | 字段说明                                                     |
+| :----------- | :------- | :----------------------------------------------------------- |
+| access_token | string   | 用户授权的唯一票据，用于调用微博的开放接口，同时也是第三方应用验证微博用户登录的唯一票据，第三方应用应该用该票据和自己应用内的用户建立唯一影射关系，来识别登录状态，不能使用本返回值里的UID字段来做登录识别。 |
+| expires_in   | string   | access_token的生命周期，单位是秒数。                         |
+| remind_in    | string   | access_token的生命周期（该参数即将废弃，开发者请使用expires_in）。 |
+| uid          | string   | 授权用户的UID，本字段只是为了方便开发者，减少一次user/show接口调用而返回的，第三方应用不能用此字段作为用户登录状态的识别，只有access_token才是用户授权的唯一票据。 |
+
+2、测试接口调用
+
+添加`httpClient`的依赖
+
+```xml
+        <dependency>
+            <groupId>org.apache.httpcomponents</groupId>
+            <artifactId>httpclient</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>commons-httpclient</groupId>
+            <artifactId>commons-httpclient</artifactId>
+            <version>3.1</version>
+        </dependency>
+```
+
+
+
+```java
+    /**
+     * POST---有参测试(普通参数)
+     */
+    @Test
+    public void doPostTestFour() {
+
+        // 获得Http客户端(可以理解为:你得先有一个浏览器;注意:实际上HttpClient与浏览器是不一样的)
+        CloseableHttpClient httpClient = HttpClientBuilder.create().build();
+
+        // 参数
+        StringBuilder params = new StringBuilder();
+
+        // 字符数据最好encoding以下;这样一来，某些特殊字符才能传过去(如:某人的名字就是“&”,不encoding的话,传不过去)
+
+        params.append("client_id=" + "3559846215");
+        params.append("&client_secret=" + "bb5a4dae33f3a601bc363b4c925f914c");
+        params.append("&grant_type=" + "authorization_code");
+        params.append("&redirect_uri=" + "http://auth.guli.com/login/loginByWeiBo"); // 发送的所有重定向地址都是一样的
+        params.append("&code=" + "66e8b6e96fd3f46e1551b26265f3db9a");
+
+
+        // 创建Post请求
+        HttpPost httpPost = new HttpPost("https://api.weibo.com/oauth2/access_token" + "?" + params.toString());
+
+        // 设置ContentType(注:如果只是传普通参数的话,ContentType不一定非要用application/json)
+        httpPost.setHeader("Content-Type", "application/json;charset=utf8");
+
+
+        // 响应模型
+        CloseableHttpResponse response = null;
+        try {
+            // 由客户端执行(发送)Post请求
+            response = httpClient.execute(httpPost);
+            // 从响应模型中获取响应实体
+            HttpEntity responseEntity = response.getEntity();
+
+            System.out.println("响应状态为:" + response.getStatusLine());
+            if (responseEntity != null) {
+                System.out.println("响应内容长度为:" + responseEntity.getContentLength());
+                System.out.println("响应内容为:" + EntityUtils.toString(responseEntity));
+            }
+        } catch (ClientProtocolException e) {
+            e.printStackTrace();
+        } catch (ParseException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                // 释放资源
+                if (httpClient != null) {
+                    httpClient.close();
+                }
+                if (response != null) {
+                    response.close();
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+```
+
+
+
+
+
+
+
+### 6.使用js打开一个新的子窗口
+
+> https://www.runoob.com/jsref/met-win-open.html
+
+window.open(*URL,name,specs,replace*)
+
+| 参数    | 说明                                                         |
+| :------ | :----------------------------------------------------------- |
+| URL     | 可选。打开指定的页面的URL。如果没有指定URL，打开一个新的空白窗口 |
+| name    | 可选。指定target属性或窗口的名称。支持以下值：_blank - URL加载到一个新的窗口。这是默认_parent - URL加载到父框架_self - URL替换当前页面_top - URL替换任何可加载的框架集*name* - 窗口名称 |
+| specs   | 可选。一个逗号分隔的项目列表。支持以下值：  channelmode=yes\|no\|1\|0是否要在影院模式显示 window。默认是没有的。仅限IE浏览器directories=yes\|no\|1\|0是否添加目录按钮。默认是肯定的。仅限IE浏览器fullscreen=yes\|no\|1\|0浏览器是否显示全屏模式。默认是没有的。在全屏模式下的 window，还必须在影院模式。仅限IE浏览器height=pixels窗口的高度。最小.值为100left=pixels该窗口的左侧位置location=yes\|no\|1\|0是否显示地址字段.默认值是yesmenubar=yes\|no\|1\|0是否显示菜单栏.默认值是yesresizable=yes\|no\|1\|0是否可调整窗口大小.默认值是yesscrollbars=yes\|no\|1\|0是否显示滚动条.默认值是yesstatus=yes\|no\|1\|0是否要添加一个状态栏.默认值是yestitlebar=yes\|no\|1\|0是否显示标题栏.被忽略，除非调用HTML应用程序或一个值得信赖的对话框.默认值是yestoolbar=yes\|no\|1\|0是否显示浏览器工具栏.默认值是yestop=pixels窗口顶部的位置.仅限IE浏览器width=pixels窗口的宽度.最小.值为100 |
+| replace | Optional.Specifies规定了装载到窗口的 URL 是在窗口的浏览历史中创建一个新条目，还是替换浏览历史中的当前条目。支持下面的值：true - URL 替换浏览历史中的当前条目。false - URL 在浏览历史中创建新的条目。 |
+
+```javascript
+// 在新的子窗口中进行微博登陆
+loginByWeiBoInNewSonWindow(){
+  let loginWindow = window.open("https://api.weibo.com/oauth2/authorize?client_id=3559846215&response_type=code&redirect_uri=http://auth.guli.com/login/loginByWeiBo",
+                                '_blank',
+                                "scrollbars=yes,resizable=1,modal=false,alwaysRaised=yes,height=640,width=320");
+
+  console.log(loginWindow);
+}
+```
+
+### 7.HttpSession共享原理图
+
+![Snip20201019_10](./images/Snip20201019_10.png)
+
+> Session问题：不能垮不用域名共享
+
+![Snip20201019_11](./images/Snip20201019_11.png)
+
+#### （1）简易的解决方案
+
+> 适用于小型的分布式系统
+
+![Snip20201019_12](./images/Snip20201019_12.png)
+
+> 不安全的方案
+
+![Snip20201019_13](./images/Snip20201019_13.png)
+
+>比较有效
+
+![Snip20201019_14](./images/Snip20201019_14.png)
+
+>
+
+![Snip20201019_15](./images/Snip20201019_15.png)
+
+新问题
+
+![Snip20201019_16](./images/Snip20201019_16.png)
+
+### 8.整合 spring-session
+
+> https://docs.spring.io/spring-session/docs/2.3.1.RELEASE/reference/html5/guides/boot-redis.html
+
+```xml
+<dependencyManagement>
+	<dependencies>
+		<dependency>
+			<groupId>org.springframework.session</groupId>
+			<artifactId>spring-session-bom</artifactId>
+			<version>Dragonfruit-RELEASE</version>
+			<type>pom</type>
+			<scope>import</scope>
+		</dependency>
+	</dependencies>
+</dependencyManagement>
+
+<dependencies>
+	        <dependency>
+            <groupId>org.springframework.session</groupId>
+            <artifactId>spring-session-data-redis</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+</dependencies>
+```
+
+配置`application.yml`
+
+```yml
+spring:
+  redis:
+    database: 5
+    host: 127.0.0.1
+    port: 6379
+  session:
+    store-type: redis # Session store type.
+    redis:
+      flush-mode: on_save # Sessions flush mode.
+      namespace: spring:session # Namespace for keys used to store sessions.
+
+server:
+  port: 20005
+  servlet:
+    session:
+      timeout: 30m # Session timeout. If a duration suffix is not specified, seconds is used.
+```
+
+开启
+
+```java
+@EnableRedisHttpSession // 整合redis作为session存储
+```
+
+如果`redis`自动配置类冲突
+
+```java
+@SpringBootApplication(exclude = {RedisAutoConfiguration.class})
+```
+
+#### （1）放大session的作用域
+
+> 注意：即使是重定向也还是可以设置`session`
+
+问题描述
+
+```java
+ //@ResponseBody
+    @GetMapping("/loginByWeiBo")
+    public String loginByWeiBo(@RequestParam("code") String code, HttpServletRequest request, HttpServletResponse response/*, ModelAndView modelAndView*/) throws IOException {
+
+        log.info("接收到微博的第一个令牌：{}", code);
+
+        //2、拿着微博返回的第一个令牌去兑换第二个令牌（accessToken）
+        MemberTo memberTo = loginService.getAccessTokenByToken(code);
+
+        Cookie cookie = new Cookie("hello", "你好");
+        cookie.setDomain("guli.com"); // 默认使用进入此服务时使用的域名，即 auth.guli.com
+        /**
+         * 第一次使用 session 就命令浏览器保存卡号。JSESSIONID这个cookie
+         * 以后浏览器访问哪个网站就会带上这个网站的cookie
+         * 子域名之间 guli.com,search.guli.com,item.guli.com,auth.guli.com
+         * 发卡的时候（指定域名为父域名（guli.com），即使是子域发送的卡，也能让父域直接使用）
+         * 即使是有 @ResponseBody 注解的前后端分离项目，也能存储cookie到浏览器
+         * */
+        response.addCookie(cookie);
+
+        //TODO 默认 spirng-session 发的令牌只能在当前子域名下有效，父域或其他域无法使用
+        //TODO 2 使用json来序列化对象
+        request.getSession().setAttribute(AuthServerConstant.LOGIN_USER_SESSION,memberTo); //放入时，对象需要实现 Serializable 接口
+
+        //return "redirect:http://guli.com/index.html"; // 
+
+        //return R.ok().put("user", memberTo);
+        return "redirect:http://guli.com/index.html";
+    }
+```
+
+#### （2）解决session-redis json 序列化
+
+```java
+    // 往容器中放入json化器即可，jsckson fastjson 都可以
+		@Bean
+    public RedisSerializer<Object> springSessionDefaultRedisSerializer() {
+        //return new GenericJackson2JsonRedisSerializer(objectMapper());
+        log.info("正在初始化session-redis json化器");
+        return new GenericFastJsonRedisSerializer();
+    }
+```
+
+#### （3）解决方案
+
+```java
+    /**
+     * 原配置地址参考
+     * https://github.com/spring-projects/spring-session/tree/2.3.1.RELEASE/spring-session-samples/spring-session-sample-boot-redis-json/src/main/java/sample/config
+     * 配置 spring session 的序列化器
+     * 方法名或者 @Bean() 必须是 springSessionDefaultRedisSerializer，详情请参考后续笔记
+     * @return
+     */
+    @Bean(name = "springSessionDefaultRedisSerializer")
+    public RedisSerializer<Object> springSessionDefaultRedisSerializer() {
+        //return new GenericJackson2JsonRedisSerializer(objectMapper());
+        log.info("正在初始化session-redis json化器");
+        return new GenericFastJsonRedisSerializer();
+    }
+
+    /***
+     * 配置 session-cookie
+     * @return
+     */
+    @Bean
+    public CookieSerializer cookieSerializer() {
+        DefaultCookieSerializer serializer = new DefaultCookieSerializer();
+
+        // 修改默认的session名字
+        serializer.setCookieName("GULI_SESSION");
+        serializer.setCookiePath("/");
+        /**
+         * 放大session的作用域
+         * */
+        serializer.setDomainName("guli.com");
+        //serializer.setDomainNamePattern("^.+?\\.(\\w+\\.[a-z]+)$");
+        log.info("正在初始化 session-cookie");
+        return serializer;
+    }
+```
+
+> Spring-session 还能自动续期，默认session再redis中的有效期是`30m`，用户如果对页面有操作，那么`session`的有效期将被刷新到`30m`
+
+#### （4）核心原理（装饰者模式）
+
+> `@EnableRedisHttpSession`注解
+
+```java
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.TYPE})
+@Documented
+@Import({RedisHttpSessionConfiguration.class})
+@Configuration(
+    proxyBeanMethods = false
+)
+public @interface EnableRedisHttpSession {
+```
+
+> 导入的`@RedisHttpSessionConfiguration`
+
+```java
+@Configuration(
+    proxyBeanMethods = false
+)
+public class RedisHttpSessionConfiguration extends SpringHttpSessionConfiguration implements BeanClassLoaderAware, EmbeddedValueResolverAware, ImportAware {
+ 		
+  	// redis 操作 session。session的增删改查
+    @Bean
+    public RedisIndexedSessionRepository sessionRepository(){
+      // 调用自己的方法使用自己创建的 RedisTemplate
+      RedisTemplate<Object, Object> redisTemplate = this.createRedisTemplate();
+        RedisIndexedSessionRepository sessionRepository = new RedisIndexedSessionRepository(redisTemplate);
+      
+      return sessionRepository;
+    }
+  
+  
+      private RedisTemplate<Object, Object> createRedisTemplate() {
+        RedisTemplate<Object, Object> redisTemplate = new RedisTemplate();
+        
+        if (this.defaultRedisSerializer != null) {
+          	// 设置默认的redis序列化器
+            redisTemplate.setDefaultSerializer(this.defaultRedisSerializer);
+        }
+				// 省略
+        return redisTemplate;
+    }
+  
+  	// 使用自动注入的方式设置 redis 序列化器，修饰符要求是 springSessionDefaultRedisSerializer 这也是为什么我们要
+    @Autowired(
+        required = false
+    )
+    @Qualifier("springSessionDefaultRedisSerializer")
+    public void setDefaultRedisSerializer(RedisSerializer<Object> defaultRedisSerializer) {
+        this.defaultRedisSerializer = defaultRedisSerializer;
+    }
+}
+```
+
+> `session`操作`redis`的`dao`层支持
+>
+> 最终实现`SessionRepository`接口
+
+```java
+public class RedisIndexedSessionRepository implements FindByIndexNameSessionRepository<RedisIndexedSessionRepository.RedisSession>, MessageListener {
+  		// 构造器要一个 RedisOperations，而实现这个接口的就是熟悉的 RedisTemplate 和 StringRedisTemplate
+      public RedisIndexedSessionRepository(RedisOperations<Object, Object> sessionRedisOperations) {
+    }
+}
+```
+
+![Snip20201020_1](./images/Snip20201020_1.png)
+
+> 核心配置：`SpringSessionRepositoryFilter`过滤器配置
+>
+> `RedisHttpSessionConfiguration`配置类继承`SpringHttpSessionConfiguration`类
+
+```java
+@Configuration(proxyBeanMethods = false)
+public class SpringHttpSessionConfiguration implements ApplicationContextAware {
+  
+  @PostConstruct // 这个注解代表构造器会初始化这个方法
+	public void init() {
+		CookieSerializer cookieSerializer = (this.cookieSerializer != null) ? this.cookieSerializer
+				: createDefaultCookieSerializer();
+		this.defaultHttpSessionIdResolver.setCookieSerializer(cookieSerializer);
+	}
+  
+  /*
+  * spring-session存储的过滤器（javax.servlet.Filter）
+  * 每一个请求到达的时候，都经过这个过滤器
+  * 这个过滤器要注入上面的 RedisIndexedSessionRepository
+  */
+  @Bean
+	public <S extends Session> SessionRepositoryFilter<? extends Session> springSessionRepositoryFilter(
+			SessionRepository<S> sessionRepository) {
+		SessionRepositoryFilter<S> sessionRepositoryFilter = new SessionRepositoryFilter<>(sessionRepository);
+		sessionRepositoryFilter.setHttpSessionIdResolver(this.httpSessionIdResolver);
+		return sessionRepositoryFilter;
+	}
+```
+
+> 核心过滤器:`SessionRepositoryFilter`
+
+```java
+public class SessionRepositoryFilter<S extends Session> extends OncePerRequestFilter {
+		
+  	@Override
+	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+			throws ServletException, IOException {
+    // 为每一个 request 添加 session的操作类
+		request.setAttribute(SESSION_REPOSITORY_ATTR, this.sessionRepository);
+		// 对原生的 request 和 response 进行包装，包装请求对象
+		SessionRepositoryRequestWrapper wrappedRequest = new SessionRepositoryRequestWrapper(request, response);
+    // 再把包装好的 wrappedRequest 和 response 做一次包装，包装响应对象
+		SessionRepositoryResponseWrapper wrappedResponse = new SessionRepositoryResponseWrapper(wrappedRequest,
+				response);
+
+		try {
+      // 放行包装后的 request 和 response 
+			filterChain.doFilter(wrappedRequest, wrappedResponse);
+		}
+		finally {
+			wrappedRequest.commitSession();
+		}
+	}
+	
+  // request 的包装类，最终实现 HttpServletRequest 接口
+  private final class SessionRepositoryRequestWrapper extends HttpServletRequestWrapper {
+    
+    // HttpServletRequest 接口 的 getSession()方法
+    @Override
+		public HttpSessionWrapper getSession() {
+			return getSession(true);
+		}
+    
+    @Override
+		public HttpSessionWrapper getSession(boolean create) {
+      HttpSessionWrapper currentSession = getCurrentSession();
+			if (currentSession != null) {
+				return currentSession;
+			}
+      // 省略
+    }
+    
+    // 还有一个 session的包装类
+    private HttpSessionWrapper getCurrentSession() {
+			return (HttpSessionWrapper) getAttribute(CURRENT_SESSION_ATTR);
+		}
+    
+    		private final class HttpSessionWrapper extends HttpSessionAdapter<S> {
+
+			HttpSessionWrapper(S session, ServletContext servletContext) {
+				super(session, servletContext);
+			}
+
+			@Override
+			public void invalidate() {
+				super.invalidate();
+				SessionRepositoryRequestWrapper.this.requestedSessionInvalidated = true;
+				setCurrentSession(null);
+				clearRequestedSessionCache();
+				SessionRepositoryFilter.this.sessionRepository.deleteById(getId());
+			}
+
+		}
+    
+  }
+}
+```
+
+> 之后，每次`request.getSession()`都是调用包装类`SessionRepositoryRequestWrapper wrappedRequest`的`getSession()`方法，而不是`HttpServletRequest request`的`getSession()`方法
+
+#### （5）新的问题-不能实现单点登录
+
+> 因为域名之间不存在父子关系，所以`session`不能共享
+
+![Snip20201020_2](./images/Snip20201020_2.png)
+
+### 9.单点登录
+
+#### （1）方案一：将cookie存储spring session redis 中
+
+```java
+    @ResponseBody
+    @PostMapping("loginByUserNameAndPassword")
+    public R loginByUserNameAndPassword(@RequestBody @Validated(LoginGroup.class) UserVo userVo,
+                                        @RequestParam(value = "finalUrl", required = false) String finalUrl,
+                                        HttpServletRequest request,
+                                        HttpSession session,
+                                        HttpServletResponse response) {
+
+        Object cookieToken = session.getAttribute(AuthServerConstant.SSO_AUTH_SERVER_COOKIE);
+
+        if (!ObjectUtils.isEmpty(cookieToken)) {
+            // 用户之前登陆过
+            log.info("该用户有 cookieToken = {}，用户之前已经登陆过",cookieToken);
+            return R.ok().put("token", cookieToken);
+        }
+        MemberTo memberTo = loginService.loginByUserNameAndPassword(userVo);
+
+        // 用于认证自己人
+        session.setAttribute(AuthServerConstant.LOGIN_USER_SESSION, memberTo);
+
+        R r = R.ok().put("user", memberTo);
+
+        /**
+         * 如果有 finalUrl 说明是其他域名的服务请求登陆
+         * 将用户的登陆信息放在redis中，以 uuid 为 token，uuid也为用户信息的key
+         * */
+        if (!ObjectUtils.isEmpty(finalUrl)) {
+
+            String token = UUID.randomUUID().toString();
+
+            // 将登陆信息放在 redis
+            stringRedisTemplate.opsForValue().set(token, JSON.toJSONString(memberTo), 30, TimeUnit.MINUTES);
+
+            /**
+             * 给浏览器端也保存一个cookie，下次三方应用请求登陆时（跳转此认证服务的前端登陆页面），就会携带此token-cookie，用于标记用户已经登陆过
+             * */
+            Cookie cookie = new Cookie(AuthServerConstant.SSO_AUTH_SERVER_COOKIE, token);
+
+            session.setAttribute(AuthServerConstant.SSO_AUTH_SERVER_COOKIE,token); // 而 这样保存是将 cookie 保存到 spring-session-redis 中，也能实现一些效果
+
+            //response.addCookie(cookie); // addCookie() 只会在浏览器端保存数据，spirng-session 不将其保存到redis
+
+            r.put("token", token);
+        }
+        return r;
+    }
+```
+
+#### （2）方案二
+
+> 1、给登录服务器留下登录痕迹
+>
+> 2、登陆服务器要将`token`信息重定向的时候，添加到`url`上
+>
+> 3、其他系统要处理`url`上的关键`token`，只要有，将`token`对应的用户保存到自己的`session`中
+>
+> 4、自己的系统要将自己的用户保存在会话中
+
+
+
+
+
+## 七、购物车
+
+### 1.需求描述
+
+（1）用户可以在`登陆状态`下将商品添加到购物车【用户购物车/在线购物车】
+
+* 放入数据库
+
+  * mongodb（性能提升不是特别大，相比`mysql`）
+
+  * redis
+
+    登陆之后，会将`临时购物车`的数据全部合并过来，并清空`临时购物车`
+
+（2）用户可以在`未登录状态`下将商品添加到购物车【游客购物车/离线购物车/临时购物车】
+
+* 放入`localstorage`
+
+* cookie
+
+* webSQL（前端数据库）
+
+* 放入redis
+
+  浏览器即是关闭，下次进入，`临时购物车数据还在`
+
+用户可以使用购物车一起结算下单
+
+用户可以查询自己的购物车
+
+用户可以在购物车中修改购买购物车商品的数量
+
+删除购物车中的商品
+
+在购物车中展示商品优惠信息
+
+提示购物车商品价格的变化
+
+### 2.interceptor中使用cookie注意
+
+> 官方文档位置 `https://docs.spring.io/spring-framework/docs/current/reference/html/web.html#mvc-handlermapping-interceptor`
+>
+> #### 1.1.6. Interception
+>
+> All `HandlerMapping` implementations support handler interceptors that are useful when you want to apply specific functionality to certain requests — for example, checking for a principal. Interceptors must implement `HandlerInterceptor` from the `org.springframework.web.servlet` package with three methods that should provide enough flexibility to do all kinds of pre-processing and post-processing:
+>
+> * `preHandle(..)`: Before the actual handler is run
+> * `postHandle(..)`: After the handler is run
+> * `afterCompletion(..)`: After the complete request has finished
+>
+> The `preHandle(..)` method returns a boolean value. You can use this method to break or continue the processing of the execution chain. When this method returns `true`, the handler execution chain continues. When it returns false, the `DispatcherServlet` assumes the interceptor itself has taken care of requests (and, for example, rendered an appropriate view) and does not continue executing the other interceptors and the actual handler in the execution chain.
+>
+> See [Interceptors](https://docs.spring.io/spring-framework/docs/current/reference/html/web.html#mvc-config-interceptors) in the section on MVC configuration for examples of how to configure interceptors. You can also register them directly by using setters on individual `HandlerMapping` implementations.
+>
+> Note that `postHandle` is less useful with `@ResponseBody` and `ResponseEntity` methods for which the response is written and committed within the `HandlerAdapter` and before `postHandle`. That means it is too late to make any changes to the response, such as adding an extra header. For such scenarios, you can implement `ResponseBodyAdvice` and either declare it as an [Controller Advice](https://docs.spring.io/spring-framework/docs/current/reference/html/web.html#mvc-ann-controller-advice) bean or configure it directly on `RequestMappingHandlerAdapter`.
+
+ 原来`postHandle()`方法在`@ResponseBody`和`ResponseEntity`方法的场景下是无效，此时对response做任何改变（比如添加`cookie`），都是晚了的。
+
+**错误例子**
+
+```java
+    public void postHandle(HttpServletRequest request, HttpServletResponse response, Object handler, ModelAndView modelAndView) throws Exception {
+
+        //String userKey = getCookieByName(request, CartConstant.USER_KEY_FOR_TEMP_COOKIE);
+
+        // 业务执行完之后，命令浏览器保存一个 临时 user-key
+        UserInfoVo userInfoVo = THREAD_LOCAL.get();
+
+        // 用户没有 user-key 的时候，就为他创建一个
+        if(!userInfoVo.isCarryTempUserKeyCookie()){
+
+            Cookie cookie = new Cookie(CartConstant.USER_KEY_FOR_TEMP_COOKIE, userInfoVo.getUserKey());
+
+            cookie.setDomain("guli.com");
+
+            cookie.setMaxAge(CartConstant.USER_KEY_FOR_TEMP_COOKIE_EXPIRE_SECONDS);
+
+            // 太晚了，此时 response 已经响应到浏览器了，再对他做添加cookie，已经无效了
+            // response.addCookie(cookie);
+        }
+    }
+```
+
+### 3.axios中使用cookie注意
+
+> 在进行跨域访问时，axios默认不会携带`cookie`等信息
+
+   然而CORS请求默认不发送cookie和HTTP认证信息，如果要把cookie发送到服务器，一方面要服务器同意，指定：
+
+```java
+res.header('Access-Control-Allow-Origin', 'http://localhost:8080');
+res.header('Access-Control-Allow-Credentials', true);
+```
+
+ 而且Access-Control-Allow-Origin不能设为星号，必须指定明确的，与请求网页一致的域名，关于跨域资源共享CORS的知识参考于阮一峰老师的博客文章http://www.ruanyifeng.com/blog/2016/04/cors.html
+
+另一方面需要在前端设置withCredentials为true，使请求头可以携带cookie：
+
+```javascript
+axios.defaults.withCredentials = true
+```
+
+```javascript
+ /**
+             * 添加到购物车
+             * */
+            addToPurchaseCart() {
+
+                console.log("要添加到购物车的SkuId = ",this.satisfiedSkuId,this.offLineCartList);
+
+                if(!this.satisfiedSkuId){
+                    alert("请选择要添加的skuId")
+                    return
+                }
+
+                /**
+                 * 当在一个域名中调用另外一个域名的 http请求时（跨域），即使两域名有共同的 cookie，也无法携带
+                 * 这样设置可以是的请求头携带cookie
+                 * */
+                axios.defaults.withCredentials = true
+
+
+                axios.get(`http://cart.guli.com/cart/cart/addToCart/${this.satisfiedSkuId}/${this.number}`).then(({data})=>{
+                    console.log(data);
+
+                    if(data.code===0){
+                        //alert(`添加成功！`);
+                        window.open(`http://cart.guli.com/success.html?skuId=${data.data.skuId}&skuName=${data.data.skuName}&skuDefaultImg=${data.data.skuDefaultImg}`);
+
+                    }else{
+                        alert(`添加失败！`);
+                    }
+                });
+            },
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 八、消息队列
+
+### 1.应用场景
+
+（1）异步处理
+
+![Snip20201117_1](./images/Snip20201117_1.png)
+
+（2）应用解耦
+
+![Snip20201117_2](./images/Snip20201117_2.png)
+
+（3）流量控制
+
+![Snip20201117_3](./images/Snip20201117_3.png)
+
+### 2.消息队列间的对比
+
+![Snip20201117_4](./images/Snip20201117_4.png)
+
+### 3.整合spring
+
+![Snip20201117_5](./images/Snip20201117_5.png)
+
+### 4.rabbitMQ概念
+
+![Snip20201117_5](./images/Snip20201117_5.png)
+
+5.使用流程
+
+（1）maven
+
+```xml
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+```
+
+（2）启用注解
+
+```java
+@EnableRabbit
+```
+
+6.使用 json序列化
+
+源码
+
+```java
+public class RabbitAutoConfiguration {
+  	@Configuration(proxyBeanMethods = false)
+	@Import(RabbitConnectionFactoryCreator.class)
+	protected static class RabbitTemplateConfiguration {
+
+		@Bean
+		@ConditionalOnMissingBean
+		public RabbitTemplateConfigurer rabbitTemplateConfigurer(RabbitProperties properties,
+				ObjectProvider<MessageConverter> messageConverter,  // 从容器中获取消息转换器
+				ObjectProvider<RabbitRetryTemplateCustomizer> retryTemplateCustomizers) {
+			RabbitTemplateConfigurer configurer = new RabbitTemplateConfigurer();
+			configurer.setMessageConverter(messageConverter.getIfUnique());
+			configurer
+					.setRetryTemplateCustomizers(retryTemplateCustomizers.orderedStream().collect(Collectors.toList()));
+			configurer.setRabbitProperties(properties);
+			return configurer;
+		}
+
+		@Bean
+		@ConditionalOnSingleCandidate(ConnectionFactory.class)
+		@ConditionalOnMissingBean(RabbitOperations.class)
+		public RabbitTemplate rabbitTemplate(RabbitTemplateConfigurer configurer, ConnectionFactory connectionFactory) {
+			RabbitTemplate template = new RabbitTemplate();
+			configurer.configure(template, connectionFactory); // configurer 中包含了消息转换器 messageConverter，这里为RabbitTemplate 配置了消息转换器
+			return template;
+		}
+  }
+}
+```
+
+使用`json`作为默认序列化机制
+
+方式一（不推荐）
+
+```java
+@Configuration
+@Slf4j
+public class RabbitTemplateConfig {
+
+    @Bean
+    //@ConditionalOnSingleCandidate(ConnectionFactory.class)
+    //@ConditionalOnMissingBean(RabbitOperations.class)
+    public RabbitTemplate rabbitTemplate(RabbitTemplateConfigurer configurer, ConnectionFactory connectionFactory) {
+        RabbitTemplate template = new RabbitTemplate();
+        configurer.configure(template, connectionFactory);
+
+        Jackson2JsonMessageConverter messageConverter = new Jackson2JsonMessageConverter();
+
+        template.setMessageConverter(messageConverter);
+
+        log.info("消息队列 RabbitTemplate json 序列化 配置完成");
+
+        return template;
+    }
+
+}
+```
+
+方式二
+
+往容器中添加一个消息转换器
+
+```java
+    @Bean
+    public Jackson2JsonMessageConverter jackson2JsonMessageConverter() {
+        log.info("正在创建消息转换器 json化");
+        return new Jackson2JsonMessageConverter();
+    }
+```
+
+### 5.接收重载消息
+
+发送者
+
+```java
+/**
+ * 发送不同消息对象，消费者通过 @RabbitListener(queues = "luo.topic.hello") + 多个 @RabbitHandler 解析
+ * */
+@Test
+public void sendDifferentMessage(){
+    Map<String, String> map = new HashMap<String, String>();
+
+    map.put("nihao","不错");
+    map.put("hello","哈哈哈");
+
+    for (int i = 0; i < 5; i++) {
+        rabbitTemplate.convertAndSend("luo.topic","luo.hello.rk",map);
+    }
+
+    List<String> list = new ArrayList<>();
+
+    list.add("领导");
+
+    list.add("大家");
+
+    for (int i = 0; i < 5; i++) {
+        rabbitTemplate.convertAndSend("luo.topic","luo.hello.rk",list);
+    }
+
+
+}
+```
+
+消费者
+
+```java
+@RabbitListener(queues = "luo.topic.hello")
+@Component
+public class ParseDifferentObject {
+
+
+    @RabbitHandler
+    public void accept(Message message, List<String> list) {
+        System.out.println("接收到集合" + list);
+    }
+
+    @RabbitHandler
+    public void accept(Message message, Map<String, String> map) {
+        System.out.println("接收到map"+map);
+    }
+}
+```
+
+### 6.消息确认机制
+
+保证消息的可靠抵达
+
+最初可以使用事务消息，但**性能下降250倍**，发送消息时，设置通道`Channel`为`事务模式`
+
+![Snip20201117_11](./images/Snip20201117_11.png)
+
+#### （1）ConfirmCallBack
+
+1、开启发送端确认
+
+```yml
+spring.rabbitmq.publisher-confirms=true
+```
+
+在创建`ConnectionFactory`的时候设置`PublisherConfirms(true)`选项，开启`confirmCallBack`
+
+2、设置`ConfirmCallBack`
+
+```java
+    @Bean
+    public RabbitTemplate rabbitTemplate(RabbitTemplateConfigurer configurer, ConnectionFactory connectionFactory) {
+        RabbitTemplate template = new RabbitTemplate();
+        configurer.configure(template, connectionFactory);
+
+        log.info("正在设置 RabbitMQ 发送消息回报");
+
+        // 1、服务器（RabbitMQ）收到消息就回调
+        RabbitTemplate.ConfirmCallback confirmCallback = new RabbitTemplate.ConfirmCallback(){
+
+            /**
+             *
+             * @param correlationData 当前消息的唯一关联数据（这个是消息的唯一id）
+             * @param ack   消息是否成功
+             * @param cause 失败的原因
+             */
+            @Override
+            public void confirm(CorrelationData correlationData, boolean ack, String cause) {
+
+                System.out.println("correlationData = " + correlationData+"\tack = "+ack+"\tcause = "+cause);
+            }
+        };
+
+        template.setConfirmCallback(confirmCallback);
+
+        return template;
+    }
+```
+
+
+
+`CorrelationData`：用来表示当前消息的唯一性
+
+消息只要被`broker`接收到就会执行`confirmCallBack`，如果是`cluster`模式，需要所有`broker`接收到才会调用`confirmCallBack`
+
+被`broker`接收到只能表示`message`已经到达服务器，并不能保证消息一定会被投递到目标`Queue`里，所以需要用到接下来的`returnCallBack`
+
+#### （2）ReturnCallBack
+
+1、开启发送端消息抵达正确队列的确认
+
+```yml
+spring:
+  rabbitmq:    
+    publisher-returns: true
+    template:
+      mandatory: true # 只要抵达队列，以异步发送优先回调我们这个 returnConfirm
+```
+
+`confirm`模式只能保证消息到达`broker`，不能保证消息准确投递到目标`queue`里。在有些业务场景下，我们需要保证消息一定要投递到目标`queue`里，此时我们需要用到`return`退回模式
+
+这样如果未能投递到目标`queue`里，将调用`returnCallBack`，可以记录下详细到投递数据，定期的巡检或者自动纠错都需要这些数据
+
+```java
+    @Bean
+    public RabbitTemplate rabbitTemplate(RabbitTemplateConfigurer configurer, ConnectionFactory connectionFactory) {
+        RabbitTemplate template = new RabbitTemplate();
+        configurer.configure(template, connectionFactory);
+
+        log.info("正在设置 RabbitMQ 发送消息回报");
+
+        // 1、服务器（RabbitMQ）收到消息就回调
+        RabbitTemplate.ConfirmCallback confirmCallback = new RabbitTemplate.ConfirmCallback(){
+
+            /**
+             *
+             * @param correlationData 当前消息的唯一关联数据（这个是消息的唯一id）
+             * @param ack   消息是否成功
+             * @param cause 失败的原因
+             */
+            @Override
+            public void confirm(CorrelationData correlationData, boolean ack, String cause) {
+
+                System.out.println("消息的唯一id（需要在发送消息时指定）correlationData = " + correlationData+"\tack = "+ack+"\tcause = "+cause);
+            }
+        };
+
+        template.setConfirmCallback(confirmCallback);
+
+        // 2、消息抵达队列的确认回调
+        RabbitTemplate.ReturnsCallback returnsCallback = new RabbitTemplate.ReturnsCallback(){
+
+            /**
+             *  只要消息队列没有投递给指定的队列，就触发这个失败回调
+             * @param returned
+             */
+            @Override
+            public void returnedMessage(ReturnedMessage returned) {
+
+                Message message = returned.getMessage(); // 投递失败的消息的相信信息
+
+                int replyCode = returned.getReplyCode(); // 回复的状态码
+
+                String replyText = returned.getReplyText(); // 回复的文本内容
+
+                String exchange = returned.getExchange(); // 当时这个消息发送给哪一个交换机
+
+                String routingKey = returned.getRoutingKey(); // 当时这个消息发送给哪一个交换机
+
+
+                log.error("发送到交换机【{}】失败，此次发送的消息是【{}】，返回码是【{}】，返回的文本内容是【{}】",exchange,message,replyCode,replyText);
+            }
+        };
+
+        template.setReturnsCallback(returnsCallback);
+
+        return template;
+    }
+```
+
+
+
+#### （3）发送端保证消息可靠发送
+
+```java
+	@Test
+	void sendMessage(){
+		HashMap<String, String> map = new HashMap<>();
+		map.put("你好","罗俊华");
+		map.put("key","value998");
+
+		// 发送消息时指定唯一id（结合服务器消息回调+将id写入数据库=>保证消息的发送是可靠的）
+		CorrelationData correlationData = new CorrelationData(UUID.randomUUID().toString());
+
+		rabbitTemplate.convertAndSend("luo.topic","luo.rk111",map,correlationData);
+		System.out.println("发送完成");
+	}
+```
+
+#### （4）可靠抵达-ack消息确认机制
+
+消费者获取到消息，成功处理，可以回复`ack`给`broker`
+
+* `basic.ack`用于肯定确认；`broker`将移除此消息
+* `basic.nack`用于否定确认；可以指定`broker`是否丢弃此消息，可以批量
+* `basic.reject`用于否定确认，同上，但不能批量
+
+默认自动确认，消息被消费者收到，就会从`broker`的`queue`中移除
+
+`queue`无消费者，消息依然会被存储，直到有消费者消费该消息
+
+消费者一旦收到消息，消费者默认会自动`ack`，`broker`就删除此消息 ，但是如果无法确定此消息是否被处理完成，或者是否处理成功，我们可以开启手动`ack`模式
+
+> 消费者自动`ack`的问题：消费者和`broker`一旦建立`channel`连接就会收到很多消息，并自动给`broker`回复已收到全部消息，`broker`会删除所有已经被接受的消息
+>
+> 如果只有一个消息处理成功就宕机了，那么消息将全部丢失
+
+* 消息处理成功，`ack()`，接收下一个消息，此时`broker`就会移除该消息
+* 消息处理失败，`nack()/reject()`，重新发送给其他人进行处理，或者容错处理后`ack()`
+* 消息一直没有调用`ack()/nack()`方法，`broker`认为此消息正在被处理，不会投递给其他人，此时若客户端断开，消息不会被`broker`移除，会投递给其他人
+
+1、开启消费者手动确认模式
+
+```yml
+spring:
+  rabbitmq:    
+    listener:
+      simple:
+        acknowledge-mode: manual # 消费端手动确认消息
+```
+
+> 消费者手动确认模式：只要我们没有明确告诉`broker`，消息被消费但是没有`ack()`，消息就一直是`unack`状态。即使`consumer`宕机，消息也不会丢失，会重新变为`ready`，下一次有新的`consumer`连接进来，就将消息发送给它
+
+2、消费端配置
+
+```java
+    /**
+     *
+     * @param message
+     * @param content 接收消息时，添加这个参数可以将消息转换为该对象类型
+     */
+    @RabbitListener(queues = "luo.queue.plus")
+    public void parseMessage(Message message, Map<String, String> content, Channel channel) throws InterruptedException, IOException {
+
+        byte[] body = message.getBody();
+
+        content.entrySet().forEach(stringStringEntry -> {
+            System.out.println(stringStringEntry.getKey()+"::"+stringStringEntry.getValue());
+        });
+
+//        TimeUnit.SECONDS.sleep(2);
+
+        System.out.println("本次传输的通道是："+channel);
+
+        // deliveryTag 是 channel 内自增的
+        long deliveryTag = message.getMessageProperties().getDeliveryTag();
+
+        System.out.println("将要手动确认 deliveryTag = "+deliveryTag);
+
+        if (deliveryTag % 2 == 0) {
+
+            // 不确认，并让该消息重新进入队列（业务失败，让消息重新回归队列）
+            try {
+                channel.basicNack(deliveryTag,false,true);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        // 使用 channel 进行手动确认（业务成功完成的时候手动确认）
+        try {
+            // 使用 deBug模式模拟宕机时，断点在这里，然后结束进程，后序的 手动确认仍然会继续
+            channel.basicAck(deliveryTag, false);
+        } catch (IOException e) {
+            // 网络中断
+            e.printStackTrace();
+        }
+    }
+```
+
+#### （5）spring boot 2.3 之前配置方式
+
+```java
+@Slf4j
+@ConditionalOnClass({ RabbitTemplate.class, Channel.class })
+public class RabbitMqConfig implements InitializingBean {
+
+    @Resource
+    RabbitTemplate template;
+
+
+
+    //    @PostConstruct // 构造器执行之后就运行这个方法
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        this.rabbitTemplateConfig();
+    }
+
+
+    public void rabbitTemplateConfig() {
+//        RabbitTemplate template = new RabbitTemplate();
+//        configurer.configure(template, connectionFactory); 因为 spring boot 2.3 之后才有这个类，所以暂时用不了
+
+        log.info("正在设置 RabbitMQ 发送消息回报");
+
+        // 1、服务器（RabbitMQ）收到消息就回调
+        RabbitTemplate.ConfirmCallback confirmCallback = new RabbitTemplate.ConfirmCallback() {
+
+            /**
+             *
+             * @param correlationData 当前消息的唯一关联数据（这个是消息的唯一id）
+             * @param ack   消息是否成功
+             * @param cause 失败的原因
+             */
+            @Override
+            public void confirm(CorrelationData correlationData, boolean ack, String cause) {
+
+                System.out.println("消息的唯一id（需要在发送消息时指定）correlationData = " + correlationData + "\tack = " + ack + "\tcause = " + cause);
+            }
+        };
+
+        template.setConfirmCallback(confirmCallback);
+
+        // 2、消息抵达队列的确认回调 （spring boot 2.3 之后）
+        /*RabbitTemplate.ReturnsCallback returnsCallback = new RabbitTemplate.ReturnsCallback(){
+
+         *//**
+         *  只要消息队列没有投递给指定的队列，就触发这个失败回调
+         * @param returned
+         *//*
+            @Override
+            public void returnedMessage(ReturnedMessage returned) {
+
+                Message message = returned.getMessage(); // 投递失败的消息的相信信息
+
+                int replyCode = returned.getReplyCode(); // 回复的状态码
+
+                String replyText = returned.getReplyText(); // 回复的文本内容
+
+                String exchange = returned.getExchange(); // 当时这个消息发送给哪一个交换机
+
+                String routingKey = returned.getRoutingKey(); // 当时这个消息发送给哪一个交换机
+
+
+                log.error("发送到交换机【{}】失败，此次发送的消息是【{}】，返回码是【{}】，返回的文本内容是【{}】",exchange,message,replyCode,replyText);
+            }
+        };*/
+
+//        template.setReturnsCallback(returnsCallback); spring boot 2.3 以后的命名方式
+
+
+        RabbitTemplate.ReturnCallback returnCallback = new RabbitTemplate.ReturnCallback() {
+
+            /**
+             *
+             * @param message 投递失败的消息的相信信息
+             * @param replyCode 回复的状态码
+             * @param replyText 回复的文本内容
+             * @param exchange 当时这个消息发送给哪一个交换机
+             * @param routingKey 当时这个消息发送给哪一个交换机
+             */
+            @Override
+            public void returnedMessage(Message message, int replyCode, String replyText, String exchange, String routingKey) {
+
+
+                log.error("发送到交换机【{}】失败，此次发送的消息是【{}】，返回码是【{}】，返回的文本内容是【{}】", exchange, message, replyCode, replyText);
+
+            }
+        };
+
+        log.info("正在配置 消息抵达队列的确认回调");
+
+        template.setReturnCallback(returnCallback);
+
+    }
+
+
+
+}
+```
+
+添加 `MessageConverter`
+
+```java
+@Slf4j
+public class RabbitMqMessageConverterConfig {
+
+    /**
+     * 这里的配置要和 RabbitTemplate 的配置拆开，因为创建 MessageConverter 要在配置 RabbitTemplate 之前
+     * 创建 RabbitTemplate 的时候要使用到 MessageConverter
+     * @return
+     */
+    @Bean
+    public MessageConverter messageConverter(){
+
+        log.info("配置 消息队列的jackson序列化");
+
+        return new Jackson2JsonMessageConverter();
+    }
+}
+```
+
+
+
+
+
+
+
+### 7.延迟队列（实现定时任务）
+
+场景：比如未支付订单，超过一定时间之后，系统自动取消订单并释放占有物品
+
+![Snip20201123_3](./images/Snip20201123_3.png)
+
+常用的解决方案
+
+`spring`的`schedule`定时任务轮询数据库：假设下订单`30`分钟之后，若未支付就自动取消订单，下订单的同时调用锁库存服务，库存服务记录是哪一个订单锁了哪一件商品，锁哪一个仓库，锁几件等信息。比如库存系统每隔`1`小时，自动查询锁库存的记录，看看哪些订单失败了，若订单失败就根据锁库存记录解锁库存。因为锁库存和记录锁库存是在同一个事务中，如果锁库存失败了，那么一定不会有锁库存记录；如果有锁库存记录，那么就之前某时刻一定锁了库存。
+
+![Snip20201123_4](./images/Snip20201123_4.png)
+
+> 缺点：
+>
+> 1、消耗系统内存（延时队列存放在内存中）
+>
+> 2、增加了数据库的压力（隔一段时间要根据锁库存记录去查询订单）
+>
+> 3、定时任务有较大的时间误差：
+>
+> ​	上一次扫描完库存锁定记录`1`分钟之后，来了一个订单，下一次扫描库存记录的时候，由于刚才那个订单还没有`30`分钟，所以扫不到，还要等下一次库存锁定记录扫描才能被扫描到，总共要`59`分钟才能被扫描到，进行解锁
+
+#### （1）解决
+
+> `RabbitMQ`的消息`TTL`和死信`Exchange`结合
+
+1、消息的`TTL`
+
+消息的`TTL`就是消息的存活时间
+
+`RabbitMQ`可以对`队列`和`消息`分别设置`TTL`
+
+* 对队列设置就是队列没有消费者连接的保留时间，也可以对每一个单独的消息做单独的设置。超过了这个时间，我们就认为这个消息死掉了，称之为死信
+* 如果队列设置了，消息也设置了，那么会**取小的**，所以一个消息如果被路由到不同的队列中，这个消息的死亡时间可能不一样（对每个队列设置不同的`TTL`）。这里单独将单个消息的`TTL`，因为它才是实现延迟任务的关键。可以通过**设置消息的`expiration`字段或者`x-message-ttl`属性来设置时间**，两者是一样的效果
+
+2、死信`Dead Letter Exchange (DLX)`
+
+* 一个消息在满足如下条件下，会进入`死信路由`，记住这里是**路由**而不是队列，一个路由可以对应很多队列。
+
+* > 什么是死信？
+  >
+  > * 一个消息被`consumer`拒收了，并且`reject`方法的参数里，`requeue = false`，也就是说不会被重新放入队列里被其他消费者使用
+  > * `(basic.reject/basic.nack) requeue = false`
+  > * 上面`TTL`到了，消息过期了
+  > * 队列长度限制满了。排在前面的消息会被丢弃或者仍到死信路由上
+
+* `Dead Letter Exchange`其实就是一种普通的`Exchange`，和创建其他`Exchange`没有两样。只是在某一个设置`Dead Letter Exchange`的队列中有消息过期了，会自动触发消息的转发，发送到`Dead Letter Exchange`中去
+* 我们既可以控制消息在一段时间后变成死信，又可以控制变成死信的消息被路由到某一个指定的交换机，结合二者，其实就可以实现一个延时队列
+
+#### （2）延迟队列实现一
+
+> 经过`delay 5m queue`的消息都会被设置上`5`分钟的过期时间
+
+![Snip20201123_5](./images/Snip20201123_5.png)
+
+假设下订单`30`分钟之后，若未支付就自动取消订单，下订单的同时调用锁库存服务，锁库存的`30`分钟之后正好可以查询订单是否支付成功，若失败了就解锁库存
+
+#### （3）延迟队列实现二
+
+> 设置消息的过期时间，实现延迟队列
+>
+> 不推荐：因为`RabbitMQ`采用的是惰性的检查机制：若后面的消息过期时间比前一条消息短，则只能前一条消息被取出之后才能获取到后一条过期时间较短的消息，此时这条消息早已过期
+
+![Snip20201123_6](./images/Snip20201123_6.png)
+
+#### （4）最简单的实现方式
+
+![Snip20201123_7](./images/Snip20201123_7.png)
+
+> 每一个微服务都应该属于自己的一个交换机、消息队列
+
+#### （5）实际的实现方式
+
+![Snip20201123_11](./images/Snip20201123_11.png)
+
+
+
+
+
+
+
+
+
+## 九、订单模块
+
+### 1.订单架构
+
+![Snip20201118_2](./images/Snip20201118_2.png)
+
+#### （1）待付款
+
+用户提交订单后，订单进行预下单，目前主流电商网站都会唤醒支付，用于快速完成支付，需要注意的是：**付款状态下可以对库存进行锁定，锁定库存需要配置支付超时时间**，超时之后将自动取消订单，订单变为关闭状态
+
+#### （2）已付款/待发货
+
+用户完成订单支付，订单系统需要记录支付时间，支付流水单号便于对账，订单下放到`wms`库存系统，仓库进行调拨、配货、分拣、出库等操作。
+
+#### （3）待收货/已发货
+
+仓储服务将商品出库后，订单进行物流环节，订单系统需要同步物流信息，便于实时了解商品的物流状态
+
+#### （4）已完成
+
+用户确认收货之后，订单交易完成。后续支付侧进行结算，如果订单存在问题进入售后状态
+
+#### （5）已取消
+
+付款之前取消订单。包括超时未付款，或用户、商户取消订单都会产生这种状态
+
+#### （6）售后中
+
+用户在付款后申请退款，或商家发货后用户申请退换货
+
+售后同样也存在两种状态，当发起售后申请之后生成售后订单，售后订单状态为未审核，等待商家审核，商家审核通过后，订单状态变更为待退货，等待用户将商品寄回，商家收获后订单  
+
+### 2.简易订单流程
+
+![Snip20201118_4](./images/Snip20201118_4.png)
+
+## 十、Feign的幂等性
+
+> 注意：`Feign`在进行远程调用时，发送远程调用请求之前会应用所有的拦截器`RequestInterceptor`
+
+### 1.feign源码
+
+#### （1）动态代理feign接口之后调用的方法
+
+```java
+  static class FeignInvocationHandler implements InvocationHandler{
+    
+      public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+      if ("equals".equals(method.getName())) {
+        try {
+          Object otherHandler =
+              args.length > 0 && args[0] != null ? Proxy.getInvocationHandler(args[0]) : null;
+          return equals(otherHandler);
+        } catch (IllegalArgumentException e) {
+          return false;
+        }
+      } else if ("hashCode".equals(method.getName())) {
+        return hashCode();
+      } else if ("toString".equals(method.getName())) {
+        return toString();
+      }
+
+      return dispatch.get(method).invoke(args); // 1、执行远程调用
+    }
+  }
+```
+
+（2）
+
+```java
+final class SynchronousMethodHandler implements MethodHandler {
+  
+private final List<RequestInterceptor> requestInterceptors;  // feign专用的请求拦截器
+
+  
+public Object invoke(Object[] argv) throws Throwable {
+    RequestTemplate template = buildTemplateFromArgs.create(argv);
+    Options options = findOptions(argv);
+    Retryer retryer = this.retryer.clone();
+    while (true) {
+      try {
+        return executeAndDecode(template, options); // 2、执行远程请求
+      } catch (RetryableException e) {
+        try {
+          retryer.continueOrPropagate(e);
+        } catch (RetryableException th) {
+          Throwable cause = th.getCause();
+          if (propagationPolicy == UNWRAP && cause != null) {
+            throw cause;
+          } else {
+            throw th;
+          }
+        }
+        if (logLevel != Logger.Level.NONE) {
+          logger.logRetry(metadata.configKey(), logLevel);
+        }
+        continue;
+      }
+    }
+  }
+  
+  
+   Object executeAndDecode(RequestTemplate template, Options options) throws Throwable {
+    Request request = targetRequest(template); // 3、解析远程调用 request
+
+    if (logLevel != Logger.Level.NONE) {
+      logger.logRequest(metadata.configKey(), logLevel, request);
+    }
+
+    Response response;
+    long start = System.nanoTime();
+    try {
+      response = client.execute(request, options);
+      // ensure the request is set. TODO: remove in Feign 12
+      response = response.toBuilder()
+          .request(request)
+          .requestTemplate(template)
+          .build();
+    } catch (IOException e) {
+      if (logLevel != Logger.Level.NONE) {
+        logger.logIOException(metadata.configKey(), logLevel, e, elapsedTime(start));
+      }
+      throw errorExecuting(request, e);
+    }
+    long elapsedTime = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+
+
+    if (decoder != null)
+      return decoder.decode(response, metadata.returnType());
+
+    CompletableFuture<Object> resultFuture = new CompletableFuture<>();
+    asyncResponseHandler.handleResponse(resultFuture, metadata.configKey(), response,
+        metadata.returnType(),
+        elapsedTime);
+
+    try {
+      if (!resultFuture.isDone())
+        throw new IllegalStateException("Response handling not done");
+
+      return resultFuture.join();
+    } catch (CompletionException e) {
+      Throwable cause = e.getCause();
+      if (cause != null)
+        throw cause;
+      throw e;
+    }
+  }
+  
+  
+    Request targetRequest(RequestTemplate template) {
+    for (RequestInterceptor interceptor : requestInterceptors) { // 4、应用所有的拦截器
+      interceptor.apply(template);
+    }
+    return target.apply(template);
+  }
+  
+  private SynchronousMethodHandler(Target<?> target, Client client, Retryer retryer,
+      List<RequestInterceptor> requestInterceptors,  // 构造器，设置 requestInterceptors
+      Logger logger,
+      Logger.Level logLevel, MethodMetadata metadata,
+      RequestTemplate.Factory buildTemplateFromArgs, Options options,
+      Decoder decoder, ErrorDecoder errorDecoder, boolean decode404,
+      boolean closeAfterDecode, ExceptionPropagationPolicy propagationPolicy,
+      boolean forceDecoding) {
+  }
+  
+  // 静态内部类负责调用构造器并创建 SynchronousMethodHandler
+    static class Factory {
+
+    private final Client client;
+    private final Retryer retryer;
+    private final List<RequestInterceptor> requestInterceptors;
+    private final Logger logger;
+    private final Logger.Level logLevel;
+    private final boolean decode404;
+    private final boolean closeAfterDecode;
+    private final ExceptionPropagationPolicy propagationPolicy;
+    private final boolean forceDecoding;
+
+      // 静态内部类的构造器（要求传入 requestInterceptors）
+    Factory(Client client, Retryer retryer, List<RequestInterceptor> requestInterceptors,
+        Logger logger, Logger.Level logLevel, boolean decode404, boolean closeAfterDecode,
+        ExceptionPropagationPolicy propagationPolicy, boolean forceDecoding) {
+      this.client = checkNotNull(client, "client");
+      this.retryer = checkNotNull(retryer, "retryer");
+      this.requestInterceptors = checkNotNull(requestInterceptors, "requestInterceptors");
+      this.logger = checkNotNull(logger, "logger");
+      this.logLevel = checkNotNull(logLevel, "logLevel");
+      this.decode404 = decode404;
+      this.closeAfterDecode = closeAfterDecode;
+      this.propagationPolicy = propagationPolicy;
+      this.forceDecoding = forceDecoding;
+    }
+
+      // 正式创建 requestInterceptors
+    public MethodHandler create(Target<?> target,
+                                MethodMetadata md,
+                                RequestTemplate.Factory buildTemplateFromArgs,
+                                Options options,
+                                Decoder decoder,
+                                ErrorDecoder errorDecoder) {
+      return new SynchronousMethodHandler(target, client, retryer, requestInterceptors, logger,
+          logLevel, md, buildTemplateFromArgs, options, decoder,
+          errorDecoder, decode404, closeAfterDecode, propagationPolicy, forceDecoding);
+    }
+  }
+}
+```
+
+（3）创建`SynchronousMethodHandler.Factory `
+
+```java
+public abstract class Feign {
+
+		public static class Builder {
+      
+      // 真正存储 requestInterceptors 的地方
+          List<RequestInterceptor> requestInterceptors = this.requestInterceptors.stream()
+                                                              .map(ri -> Capability.enrich(ri, capabilities))
+                                                              .collect(Collectors.toList());
+      
+          public Feign build() {
+      Client client = Capability.enrich(this.client, capabilities);
+      Retryer retryer = Capability.enrich(this.retryer, capabilities);
+      List<RequestInterceptor> requestInterceptors = this.requestInterceptors.stream()
+          .map(ri -> Capability.enrich(ri, capabilities))
+          .collect(Collectors.toList());
+      Logger logger = Capability.enrich(this.logger, capabilities);
+      Contract contract = Capability.enrich(this.contract, capabilities);
+      Options options = Capability.enrich(this.options, capabilities);
+      Encoder encoder = Capability.enrich(this.encoder, capabilities);
+      Decoder decoder = Capability.enrich(this.decoder, capabilities);
+      InvocationHandlerFactory invocationHandlerFactory =
+          Capability.enrich(this.invocationHandlerFactory, capabilities);
+      QueryMapEncoder queryMapEncoder = Capability.enrich(this.queryMapEncoder, capabilities);
+
+            // 这里负责创建 SynchronousMethodHandler.Factory 
+      SynchronousMethodHandler.Factory synchronousMethodHandlerFactory =
+          new SynchronousMethodHandler.Factory(client, retryer, requestInterceptors, logger,
+              logLevel, decode404, closeAfterDecode, propagationPolicy, forceDecoding);
+      ParseHandlersByName handlersByName =
+          new ParseHandlersByName(contract, options, encoder, decoder, queryMapEncoder,
+              errorDecoder, synchronousMethodHandlerFactory);
+      return new ReflectiveFeign(handlersByName, invocationHandlerFactory, queryMapEncoder);
+    }
+      
+      
+    /**
+     * Sets the full set of request interceptors for the builder, overwriting any previous
+     * interceptors.
+     */
+      // 只要 IOC 中有 requestInterceptors 就将其添加到 requestInterceptors 的集合中
+    public Builder requestInterceptors(Iterable<RequestInterceptor> requestInterceptors) {
+      this.requestInterceptors.clear();
+      for (RequestInterceptor requestInterceptor : requestInterceptors) {
+        this.requestInterceptors.add(requestInterceptor);
+      }
+      return this;
+    }
+      
+    }
+```
+
+
+
+### 2.feign远程调用丢失请求头
+
+![Snip20201119_3](./images/Snip20201119_3.png)
+
+### 3.RequestContextHolder
+
+spring 通过使用`RequestContextHolder`（请求上下文保持器）来使得同一次请求的同一个线程获取到的`HttpServletRequest`都是一样的
+
+> 注意：多线程环境下如果要使用的话，需要在主线程中执行`RequestContextHolder.getRequestAttributes()`进行保存`RequestAttributes`，
+>
+> 然后在新线程中使用`RequestContextHolder.setRequestAttributes(requestAttributes);`来确保其他线程也能获取到`requestAttributes`
+
+```java
+// 源码
+public abstract class RequestContextHolder  {
+  
+  	// 底层使用 ThreadLocal 来实现，所以不能在多线程环境下使用 
+  	private static final ThreadLocal<RequestAttributes> requestAttributesHolder =
+			new NamedThreadLocal<>("Request attributes");
+}
+```
+
+### 4.我的实际代码
+
+```java
+// 主线程中的方法    
+public PreOrderInfoVo getPrePaymentInfo() throws ExecutionException, InterruptedException {
+
+        MemberTo memberTo = LoginUserInterceptor.THREAD_LOCAL.get();
+				// 1、手动保存当前请求的 requestAttributes
+        RequestAttributes requestAttributes = RequestContextHolder.getRequestAttributes();
+
+        // 查询本次订单所选中的购物项
+        CompletableFuture<CartVo> queryOrderItemTask = CompletableFuture.supplyAsync(() -> {
+						
+          	// 2、为新开的线程设置 requestAttributes
+            RequestContextHolder.setRequestAttributes(requestAttributes);
+
+            return getCartAndFilterUnSelectedItems();
+
+        }, executorService);
+    }
+```
+
+#### （1）`FeignInterceptor`拦截器配置
+
+```java
+@Slf4j
+public class RequestHeaderFeignInterceptor implements RequestInterceptor {
+
+    @Override
+    public void apply(RequestTemplate template) {
+
+        /*
+        自己写的没有人家的好用
+        HttpServletRequest httpServletRequest = LoginUserInterceptor.REQUEST_THREAD_LOCAL.get();
+
+        String cookie = httpServletRequest.getHeader("Cookie");*/
+
+
+        /**
+         * RequestContextHolder 是一个 request 上下文保持器
+         * 只要是同一次请求的同一个线程，其获取到的 requestAttributes 都是一样的
+         * 因为 RequestContextHolder 的底层是使用 ThreadLocal 来实现的
+         * 注意：多线程调用，将会失效
+         */
+        RequestAttributes requestAttributes = RequestContextHolder.getRequestAttributes();
+
+        // 可以强转
+        ServletRequestAttributes servletRequestAttributes = (ServletRequestAttributes) requestAttributes;
+
+        /**
+         * 3、因为没有为每一个线程都设置 RequestContextHolder 的 RequestAttributes，
+         * 加个判断，这样没有设置 RequestAttributes 的线程就不需要添加额外的请求头了
+         * */
+        if(ObjectUtils.isEmpty(servletRequestAttributes)){
+            return;
+        }
+
+        // 然后获取到 request
+        HttpServletRequest request = servletRequestAttributes.getRequest();
+
+        // 获取老请求中的 Cookie
+        String cookieFromRequestContextHolder = request.getHeader("Cookie");
+
+        
+        // 为feign远程调用设置请求头
+        template.header("Cookie",cookieFromRequestContextHolder);
+
+        log.info("进行了feign远程调用，进行同步请求头中的cookie = {}",cookieFromRequestContextHolder);
+    }
+}
+```
+
+#### （2）注册拦截器
+
+```java
+@Configuration
+@Slf4j
+public class FeignInterceptorConfig {
+
+    @Bean
+    public RequestInterceptor requestInterceptor(){
+
+        log.info("正在创建 feign 的请求拦截器");
+
+        return new RequestHeaderFeignInterceptor();
+    }
+}
+```
+
+### 5.幂等性
+
+接口幂等性就是**用户对于同一操作发起的一次请求或者多次请求的结果都是一致的**，不会因为多次点击而产生了副作用；比如支付场景，用户购买了商品支付扣款成功，但是返回结果的时候网络异常，此时钱已经扣了，用户再次点击按钮，此时会进行第二次扣款，返回结果成功，用户查询余额发现多扣钱了，流水记录也变成了两条，这就没有保证接口幂等性
+
+#### （1）什么情况下应该使用接口幂等性
+
+* 用户多次点击按钮
+
+* 用户页面回退再提交
+
+* 微服务互相调用，由于网络问题，导致请求失败。`feign`触发重试机制
+
+* 其他业务情况
+
+  > 注意：少部分数据库查询不幂等
+  >
+  > 比如叠加操作
+  >
+  > ```sql
+  > update tab1 set count = count + 1 where col = 10
+  > ```
+  >
+  > 自增主键的插入操作
+
+### 6.幂等性解决方案
+
+#### （1）token方案
+
+1、服务端提供了发送`token`的接口。我们在分析业务的时候，哪些业务是存在幂等问题的，就必须在执行业务之前，先去获取`token`，服务器会把`token`，保存到`redis`中
+
+2、然后调用业务接口请求时，把`token`携带过去，一般放在请求头部
+
+3、服务器判断`token`是否存在`redis`中，存在表示第一次请求，然后删除，继续执行业务
+
+4、如果判断`token`不存在`redis`中，就表示是重复操作，直接返回重复标记给`client`，这样就保证了业务代码，不被重复执行
+
+> 危险性：
+>
+> 1、执行操作前删除`token`还是后删除`token`；
+>
+> （1）先删除可能导致，业务确实没有执行，重试还带上之前的`token`，由于防重设计，导致后续的重复请求不能被执行
+>
+> （2）后删除可能导致，业务处理成功，但是服务闪断、出现超时，没有删除`token`，别人继续重试，业务被执行两遍，不能保证幂等性
+>
+> （3）我们最好设置为**先删除`token`，如果业务调用失败，就重新获取`token`再次请求**
+>
+> 2、`token`获取、比较和删除必须是原子性
+>
+> （1）`redis.get(token)`，`token.equals()`，`redis.del(token)`，如果这两个操作不是原子，可能导致高并发下，都`get()`到同样的数据，判断都成功，继续业务并发执行
+>
+> （2）可以在`redis`中使用`lua`脚本完成这个操作
+>
+> 获取令牌->比较令牌->删除令牌
+>
+> ```lua
+> if redis.call('get',KEYS[1])==ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end
+> ```
+>
+> 
+
+#### （2）各种锁机制
+
+1、数据库悲观锁
+
+```sql
+select * from tab1 where id = 1 for update
+```
+
+悲观锁使用时一般伴随事物一起使用，数据库锁定的时间可能会很长，需要根据实际情况选用。另外需要注意的是，`id`字段一定是主键或者唯一索引，不然可能造成锁表的结果，处理起来非常麻烦
+
+2、数据库乐观锁
+
+这种方法适合在**更新场景**中，
+
+```sql
+update t_goods set count = count - 1 , version = version + 1 where good_id = 2 and version = 1
+```
+
+根据`version`版本，也就是操作库存前先获取当前商品的`version`版本号，然后操作的时候带上此版本号。
+
+梳理：
+
+> 第一次操作库存时，得到`version`为1，调用库存服务`version`变为了`2`，但是返回给订单服务时出现了问题，订单服务又一次发起调用库存服务，当订单服务传诸如`version`还是`1`，再执行上面的sql语句时，就不会执行，因为`version`已经改变为`2`了，`where`条件就不成立。这样就保证了不管调用几次，只会真正的处理一次。
+>
+> **乐观锁主要适用于处理读多写少的问题**
+
+3、业务层分布式锁
+
+如果多个机器可能在同一时间同时处理相同的数据，比如多台机器定时定时任务都拿到了相同的数据处理，我们就可以加分布式锁，锁定此数据，处理完之后释放锁。获取到锁的必须先判断这个数据是否被处理过
+
+#### （3）各种唯一约束
+
+1、数据库唯一约束
+
+插入数据，应该按照唯一索引进行插入，比如订单号，相同的订单号就不可能有两条记录插入。
+
+我们在数据库层做防止重复操作
+
+这个机制是利用了数据库的主键唯一约束的特性，解决了在`insert`场景时幂等的问题。但主键的要求不是自增的主键，这样就需要业务生成全局唯一的主键
+
+如果是分库分表场景下，路由规则要保证相同请求下，落地在同一个数据库和同一个表中，要不然数据库主键约束就不起效果了，因为是不同的数据库和表主键不相关	
+
+2、redis set 防重处理
+
+很多数据需要处理，只能被处理一次，比如我们可以计算数据的`MD5`将其放入`redis`的`set`集合中，每次处理数据，先看这个`MD5`是否已经存在，存在就不处理
+
+#### （4）防重表
+
+使用订单号`OrderNo`作为去重表的唯一索引，把唯一索引插入去重表，再进行业务操作，且他们在同一个事务中。这个保证了重复请求时，因为去重表有唯一约束，导致请求失败，避免了幂等问题。
+
+> 注意：去重表和业务表应该在同一库中，这样就保证了在同一个事务，即使业务操作失败了，也会把去重表的数据回滚，这个很好的保证了数据的一致性
+
+之前的`redis`防重也算
+
+#### （5）全局请求唯一id
+
+调用接口时，生成一个唯一id，`redis`将数据保存到集合中（去重），存在即处理过，可以使用`nginx`设置每一个请求的唯一id
+
+```shell
+proxy_set_header X-Request_Id $request_id;
+```
+
+
+
+### 7.解决订单重复提交
+
+![Snip20201119_5](./images/Snip20201119_5.png)
+
+
+
+## 十一、分布式事务
+
+![Snip20201121_1](./images/Snip20201121_1.png)
+
+
+
+### 1.事务的隔离级别
+
+> 注意：隔离级别越高，数据库的并发能力越低
+
+（1）`READ UNCOMMITED`：读未提交
+
+该隔离事务的级别会读到其他未提交事务的数据，此现象也称之为**脏读**
+
+（2）`READ COMMITED`：读未提交
+
+一个事务可以读取其他事物已经提交了的数据，多次读取会造成不一样的结果，此现象称为**不可重复读**，`Oracle`和`Sql Server`默认的隔离级别
+
+（3）`REPEATABLE READ`：可重复读
+
+该隔离级别是`Mysql`默认的隔离级别，在同一个事务里，`select`的结果是事务开始时间点的状态，因此，同样的`select`操作读到的结果会是一样的（在同一个事务中）。在一个事务中，即使其他事务把这行数据删了，但是在这个事务中也还是可以读取到当前数据
+
+但是，会有**幻读现象**，`mysql`的`InnoDB`引擎可以通过`next-key lock`机制（参考行锁的算法），来避免幻读
+
+（4）`SERIALIZABLE`：序列化
+
+该隔离级别下事务都是串行顺序执行的，`mysql`数据库的`InnoDB`引擎会给读操作**隐式**加一把读共享锁，从而避免了脏读，不可重复读，幻读的问题
+
+### 2.调整事务的隔离级别
+
+```java
+@Transactional(isolation = Isolation.REPEATABLE_READ)
+```
+
+### 3.事务的传播行为
+
+（1）`Propagation_Required`：如果当前没有事务，就创建一个事务，如果当前存在事务，就继续使用当前的事务（最常用的配置）
+
+（2）`Propagation_Supports`：支持当前事务，如果存在当前事务，就加入该事务，如果不存在事务，就以非事务模式执行
+
+（3）`Propagation_Mandatory`：支持当前事务，如果当前存在事务，就加入该事务，如果当前不存在事务就抛出异常
+
+（4）`Propagation_Requires_new`：创建新事务，无论当前存不存在事务，都创建新事务
+
+（5）`Propagation_Not_Supported`：以非事务方式执行操作，如果当前存在事务，就把事务挂起
+
+（6）`Propagation_Never`：以非事务方式执行，如果当前存在事务，则抛出异常
+
+（7）`Propagation_Nested`：如果当前存在事务，则在嵌套事务内执行，如果当前没有事务，则执行与`Propagation_Required`类似的操作
+
+### 4.同一个对象内方法互调，代理失效的问题
+
+```java
+/**
+ * 测试事务的传播行为
+ */
+@Service
+public class PropagationTest {
+
+    /**
+     * 禁止：使用 @Autowired 注入会循环依赖，内存爆炸
+     */
+    @Autowired
+    PropagationTest propagationTest;
+
+    /**
+     * 注意：同一个对象内事务方法互调，事务失效（不止是事务方法，所有代理相关的都会失效）
+     * spring 中，同一个service()的方法互相调用，被调用者的 @Transactional 注解不会生效
+     * 因为事务是使用代理来控制的，要跨 service 调用才能生效
+     * 像下面的这样直接调用，相当于跳过的代理
+     */
+    @Transactional(propagation = Propagation.REQUIRED,timeout = 30)
+        // Required 默认
+    void a() {
+        b(); // a() b() 共享同一事务，都一起回滚
+        c(); // 使用自己的事务，不会回滚
+        int i = 10 / 0;
+    }
+
+
+    /**
+     * 因为在这里 b() 和 a() 是共用一个事务，所以在 b()额外设置事务参数（timeout = 2）是无效的，参数由a()事务的发起者决定
+     */
+    @Transactional(propagation = Propagation.REQUIRED,timeout = 2)
+    void b() {
+
+    }
+
+    /**
+     * 因为是新事务，所以参数(timeout = 10)配置有效
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW,timeout = 10)
+    void c() {
+
+    }
+}
+```
+
+
+
+#### （1）解决方法
+
+1、引入`aop-starter`中的`aspectJ`
+
+```java
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+```
+
+2、开启`aspectJ`动态代理
+
+> 如果不开启的话，默认是使用`JDK`按照接口的动态代理
+>
+> 开启之后，所有的动态代理都是使用`AspecJ`来生成的
+>
+> 优点：即使没有接口，也能动态代理	
+>
+> `exposeProxy = true`：对外暴露代理对象
+>
+> `proxyTargetClass=false`：是否使用`CGLIB`代理替换默认的`JDK`代理
+
+```java
+@EnableAspectJAutoProxy(exposeProxy = true,proxyTargetClass=false)
+```
+
+3、使用代理对象实现本类互调
+
+```java
+/**
+ * 测试事务的传播行为
+ */
+@EnableAspectJAutoProxy(exposeProxy = true)
+@Service
+//@Aspect //注意 @EnableAspectJAutoProxy(exposeProxy = true) 和 @Aspect 不能同时使用，不然就报异常
+public class PropagationTest {
+
+    /**
+     * 禁止：使用 @Autowired 注入会循环依赖，内存爆炸
+
+    @Autowired
+    PropagationTest propagationTest;
+     */
+
+    /**
+     * 注意：同一个对象内事务方法互调，事务失效（不止是事务方法，所有代理相关的都会失效）
+     * spring 中，同一个service()的方法互相调用，被调用者的 @Transactional 注解不会生效
+     * 因为事务是使用代理来控制的，要跨 service 调用才能生效
+     * 像下面的这样直接调用，相当于跳过的代理
+     */
+    @Transactional(propagation = Propagation.REQUIRED,timeout = 30)
+        // Required 默认
+    void a() {
+
+        PropagationTest propagationTest = (PropagationTest)AopContext.currentProxy();
+
+        propagationTest.b(); // a() b() 共享同一事务，都一起回滚
+
+        propagationTest.c(); // 使用自己的事务，不会回滚
+
+        /* 直接调用对象中的方法，因为越过了代理，所以事务不会生效
+        b(); // a() b() 共享同一事务，都一起回滚
+        c(); // 使用自己的事务，不会回滚
+
+         */
+        int i = 10 / 0;
+    }
+
+
+    /**
+     * 因为在这里 b() 和 a() 是共用一个事务，所以在 b()额外设置事务参数（timeout = 2）是无效的，参数由a()事务的发起者决定
+     */
+    @Transactional(propagation = Propagation.REQUIRED,timeout = 2)
+    void b() {
+
+    }
+
+    /**
+     * 因为是新事务，所以参数(timeout = 10)配置有效
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW,timeout = 10)
+    void c() {
+
+    }
+}
+
+```
+
+
+
+
+
+### 5.分布式事务的几种解决方案
+
+#### （1）2PC模式
+
+数据库支持的`2PC (2 phase commit) 二阶段提交`，又叫做`XA Transactions`。
+
+`MySql`从`5.5`版本开始支持，`Sql Server 2005`开始支持，`Oracle 7`开始支持
+
+其中，`XA`是一个两阶段提交协议，该协议分为以下两个阶段
+
+![Snip20201123_2](./images/Snip20201123_2.png)
+
+第一阶段：事务协调器要求每个涉及到事务的数据库预提交`precommit`操作，子事务反应是否可以提交
+
+第二阶段：事务协调器要求每个数据库都提交数据
+
+其中，如果有任何一个数据库否决此次提交，那么所有的数据库都会被要求回滚他们在此事务中的那部分信息
+
+> 评价
+>
+> `XA`协议比较简单，而且一旦商业数据库实现了`XA`协议，使用分布式事务的成本也比较低
+>
+> `XA`**性能不理想**：特别是在交易下单链路，往往并发量很高，`XA`无法满足高并发场景
+>
+> `XA`目前在商业数据库支持的比较理想，**在mysql中支持的不太理想**，`mysql`的`XA`实现，没有记录`prepare`阶段日志，主备切换会导致主库与备库数据不一致
+>
+> 许多`nosql`也没有支持`XA`，这让`XA`的应用场景变得非常狭隘
+>
+> 也有`3PC`，引入了超时机制，无论调度者还是参与者，在向对方发送请求后，若长时间未收到回应则做出相应的处理
+
+
+
+
+
+#### （2）柔性事务-TCC事务补偿型方案
+
+刚性事务：遵循`ACID`原则`原子性(Aomicity)、一致性(Consistency)、隔离性(Isolation)、持久性(Durability)`，强一致性
+
+柔性事务：遵循`Base`理论，最终一致性
+
+`TCC`可以看作是`2PC、3PC`的手动版
+
+与刚性事务不同，柔性事务允许一定时间内，不同节点的数据不一致，但要求最终一致
+
+![Snip20201123_1](./images/Snip20201123_1.png)
+
+
+
+一阶段：`prepare`行为，调用自定义的`prepare`逻辑
+
+二阶段：`commit`行为，调用自定义的`commit`逻辑
+
+三阶段：`rollback`行为，调用自定义的`rollback`逻辑
+
+所谓`TCC`模式，是指把自定义的分支事务纳入到全局事务的管理中
+
+#### （3）柔性事务-最大努力通知
+
+按规律进行通知，**不保证数据一定通知成功，但会提供可查询操作接口进行核对**。这种方案主要用在与第三方系统通讯时，比如：调用微信或支付宝支付后的查询结果通知。这种方案是结合`MQ消息队列`进行实现。例如：通过`MQ`发送`Http`请求，设置最大通知次数。达到通知次数之后不再通知。
+
+案例：银行通知、商户通知等（各大交易平台间商户通知：多次通知，查询校对，对账文件），支付宝支付成功异步回调
+
+#### （4）柔性事务-可靠消息+最终一致性方案（异步确保型）
+
+实现：业务处理服务在业务事务提交之前，向实时消息服务请求发送消息，实时消息服务只记录消息数据，而不是真正的放松。业务处理服务在业务事务提交之后，向实时消息服务确认发送。只有在得到确认发送指令之后，实时消息服务才会真正发送
+
+
+
+### 6.使用 Seata 实现二阶段提交 2PC 管理全局分布式事务
+
+> Seata 1.4 为例
+>
+> 每一个`Seata`版本，其配置、数据库表等天差地别，当十分小心
+
+#### （1）为每一个微服务创建`undo_log`表
+
+> `sql`文件在`seata`的`READ_zh.md`文件`client`的链接上
+>
+> ```sql
+> -- for AT mode you must to init this sql for you business database. the seata server not need it.
+> CREATE TABLE IF NOT EXISTS `undo_log`
+> (
+>     `branch_id`     BIGINT(20)   NOT NULL COMMENT 'branch transaction id',
+>     `xid`           VARCHAR(100) NOT NULL COMMENT 'global transaction id',
+>     `context`       VARCHAR(128) NOT NULL COMMENT 'undo_log context,such as serialization',
+>     `rollback_info` LONGBLOB     NOT NULL COMMENT 'rollback info',
+>     `log_status`    INT(11)      NOT NULL COMMENT '0:normal status,1:defense status',
+>     `log_created`   DATETIME(6)  NOT NULL COMMENT 'create datetime',
+>     `log_modified`  DATETIME(6)  NOT NULL COMMENT 'modify datetime',
+>     UNIQUE KEY `ux_undo_log` (`xid`, `branch_id`)
+> ) ENGINE = InnoDB
+>   AUTO_INCREMENT = 1
+>   DEFAULT CHARSET = utf8 COMMENT ='AT transaction mode undo table';
+> ```
+>
+> 
+
+#### （2）创建 seata-server 专用的全局事务管理表
+
+> 表所在位置：https://github.com/seata/seata/blob/develop/script/server/db/mysql.sql
+
+```sql
+-- -------------------------------- The script used when storeMode is 'db' --------------------------------
+-- the table to store GlobalSession data
+CREATE TABLE IF NOT EXISTS `global_table`
+(
+    `xid`                       VARCHAR(128) NOT NULL,
+    `transaction_id`            BIGINT,
+    `status`                    TINYINT      NOT NULL,
+    `application_id`            VARCHAR(32),
+    `transaction_service_group` VARCHAR(32),
+    `transaction_name`          VARCHAR(128),
+    `timeout`                   INT,
+    `begin_time`                BIGINT,
+    `application_data`          VARCHAR(2000),
+    `gmt_create`                DATETIME,
+    `gmt_modified`              DATETIME,
+    PRIMARY KEY (`xid`),
+    KEY `idx_gmt_modified_status` (`gmt_modified`, `status`),
+    KEY `idx_transaction_id` (`transaction_id`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8;
+
+-- the table to store BranchSession data
+CREATE TABLE IF NOT EXISTS `branch_table`
+(
+    `branch_id`         BIGINT       NOT NULL,
+    `xid`               VARCHAR(128) NOT NULL,
+    `transaction_id`    BIGINT,
+    `resource_group_id` VARCHAR(32),
+    `resource_id`       VARCHAR(256),
+    `branch_type`       VARCHAR(8),
+    `status`            TINYINT,
+    `client_id`         VARCHAR(64),
+    `application_data`  VARCHAR(2000),
+    `gmt_create`        DATETIME(6),
+    `gmt_modified`      DATETIME(6),
+    PRIMARY KEY (`branch_id`),
+    KEY `idx_xid` (`xid`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8;
+
+-- the table to store lock data
+CREATE TABLE IF NOT EXISTS `lock_table`
+(
+    `row_key`        VARCHAR(128) NOT NULL,
+    `xid`            VARCHAR(96),
+    `transaction_id` BIGINT,
+    `branch_id`      BIGINT       NOT NULL,
+    `resource_id`    VARCHAR(256),
+    `table_name`     VARCHAR(32),
+    `pk`             VARCHAR(36),
+    `gmt_create`     DATETIME,
+    `gmt_modified`   DATETIME,
+    PRIMARY KEY (`row_key`),
+    KEY `idx_branch_id` (`branch_id`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8;
+```
+
+
+
+#### （3）使用`seata`代理数据源
+
+> 数据库操作时，使用`seata`代理的数据源进行操作，使用`seata`数据源对原数据源进行包装
+
+1、数据源自动配置类源码
+
+```java
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnClass({ DataSource.class, EmbeddedDatabaseType.class })
+@EnableConfigurationProperties(DataSourceProperties.class)
+@Import({ DataSourcePoolMetadataProvidersConfiguration.class, DataSourceInitializationConfiguration.class })
+public class DataSourceAutoConfiguration {
+  
+  // 默认5中类型的数据源，默认条件下，最终 Hikari 会生效 
+  @Configuration(proxyBeanMethods = false)
+	@Conditional(PooledDataSourceCondition.class)
+	@ConditionalOnMissingBean({ DataSource.class, XADataSource.class })
+	@Import({ DataSourceConfiguration.Hikari.class, DataSourceConfiguration.Tomcat.class,
+			DataSourceConfiguration.Dbcp2.class, DataSourceConfiguration.Generic.class,
+			DataSourceJmxConfiguration.class })
+	protected static class PooledDataSourceConfiguration {
+
+	}
+}
+```
+
+2、自动配置创建`Hikari`数据源的过程
+
+```java
+abstract class DataSourceConfiguration {
+
+	/**
+	 * Generic DataSource configuration.
+	 */
+	@Configuration(proxyBeanMethods = false)
+	@ConditionalOnMissingBean(DataSource.class)
+	@ConditionalOnProperty(name = "spring.datasource.type")
+	static class Generic {
+    
+  @SuppressWarnings("unchecked")
+	protected static <T> T createDataSource(DataSourceProperties properties, Class<? extends DataSource> type) {
+		return (T) properties.initializeDataSourceBuilder().type(type).build(); // 3、构建数据源
+	}
+
+	/**
+	 * Hikari DataSource configuration.
+	 */
+	@Configuration(proxyBeanMethods = false)
+	@ConditionalOnClass(HikariDataSource.class)
+	@ConditionalOnMissingBean(DataSource.class) 
+	@ConditionalOnProperty(name = "spring.datasource.type", havingValue = "com.zaxxer.hikari.HikariDataSource",
+			matchIfMissing = true) // 1、matchIfMissing = true 因为设置设置了spring.datasource.type缺省时就默认创建 Hikari 作为数据源
+	static class Hikari {
+
+		@Bean
+		@ConfigurationProperties(prefix = "spring.datasource.hikari")
+		HikariDataSource dataSource(DataSourceProperties properties) {
+			HikariDataSource dataSource = createDataSource(properties, HikariDataSource.class); // 2、调用本类的方法
+			if (StringUtils.hasText(properties.getName())) {
+				dataSource.setPoolName(properties.getName());
+			}
+			return dataSource;
+		}
+
+	}
+  
+}
+```
+
+3、所有想要用到分布式事务的微服务使用 `seata DataSourceProxy`代理自己的数据源
+
+```java
+@Slf4j
+public class SeataDataSourceWrapperConfig {
+
+    @ConditionalOnClass(DataSourceProxy.class)
+    @Bean
+    public DataSource createSeataProxyDataSource(DataSourceProperties properties/*, Class<? extends DataSource> type*/) {
+
+        HikariDataSource hikariDataSource = properties.initializeDataSourceBuilder().type(HikariDataSource.class).build();
+
+        log.info("正在将 Hikari 数据源包装为 Seata 代理数据源");
+
+        if (StringUtils.hasText(properties.getName())) {
+            hikariDataSource.setPoolName(properties.getName());
+        }
+
+        return new DataSourceProxy(hikariDataSource);
+    }
+
+}
+```
+
+
+
+### 7.使用消息队列显示柔性事务
+
+#### （1）解锁库存的场景
+
+1、下订单成功，订单过期且没有支付，被系统自动取消
+
+2、被用户手动取消
+
+3、 下定单成功、锁库存也成功、但是其他业务失败（下订单时抛出异常），导致订单回滚
+
+#### （2）定时关闭订单
+
+![Snip20201126_2](./images/Snip20201126_2.png)
+
+
+
+#### （3）库存解锁
+
+![Snip20201126_4](./images/Snip20201126_4.png)
+
+#### （4）订单释放与库存解锁间的逻辑
+
+![Snip20201126_3](./images/Snip20201126_3.png)
+
+![Snip20201126_4](./images/Snip20201126_4.png)
+
+
+
+#### （5）柔性事务-可靠消息+最终一致性方法（异步确保型）
+
+实现：业务处理服务在业务事务提交之前，向实时消息服务请求发送信息，实时消息服务只记录消息数据，而不是真正的发送。业务处理服务在业务事务提交之后，向实时消息服务确认发送。只有在得到确认发送指令后，实时消息服务才会真正的发送
+
+### 8、如何保证消息的可靠性
+
+#### （1）消息丢失
+
+消息发送出去，由于网络问题没有抵达服务器
+
+* 做好容错方法`try-catch`，发送消息可能会网络失败，失败后要有重试机制，可以记录到数据库，采用定期扫描重发的方式
+* 做好日志记录，每个消息状态是否被服务器收到都应该记录
+* 做好定期重发，如果消息没有发送成功，定期去数据库扫描未成功的消息进行重发
+
+消息抵达`Broker`，`Broker`要将消息写入磁盘（持久化）才算成功，若此时`broker`尚未持久化完成，宕机
+
+* `publisher`也必须加入确认回调机制，确认成功的消息，修改数据库消息状态
+
+自动`Ack`状态下，消费者接收到消息，但没来及处理消息然后宕机
+
+* 一定要开启手动`Ack`，消费成功时才移除，失败或者还没来得及处理就`noAck`并重新入队
+
+#### （2）消息重复
+
+* 消息消费成功，事务已经提交，`ack`时机器宕机。导致`ack`没有成功，`broker`的消息重新由`unack`转为`ready`，`broker`又重新发送
+
+* 消息消费失败，由于重试机制，自动又将消息发送出去
+
+* 成功消费，`ack`时宕机，消息由`unack`变为`ready`，`broker`又重新发送
+
+  * 消费者的业务消费接口应该设计为**幂等性**的，比如库存有工作单的状态标志
+
+    > 只有库存状态是锁定状态才进行解锁操作
+
+  * 使用**防重表(redis,mysql)**，发送消息的每一个都有业务的唯一标示，处理过就不用处理
+
+    > 记录该消息是否已经被处理过，如果处理过，就不再处理了
+
+  * `RabbitMQ`的每一个消息都有`redelivered`字段，可以获取**是否被重新投递过来的**，而不是第一次投递过来的
+
+    > ```java
+    >         // 判断该消息是不是重新进入队列的，当前消息是不是第二次以及以后派发过来的，但是不知道上一次是否处理成功
+    >         Boolean redelivered = message.getMessageProperties().getRedelivered();
+    > ```
+
+#### （3）消息积压
+
+> 消息积压过多会使得`MQ`性能下降
+
+* 消费者消息积压
+* 消费者消费能力不足积压
+* 发送者发送流量太大
+  * 上线更多的消费者，进行正常消费
+  * 上线专门的队列消费服务，将消息先批量取出来，记录数据库，离线慢慢处理
+
+## 十二、支付服务
+
+### 1.非对称加密
+
+![Snip20201127_1](./images/Snip20201127_1.png)
+
+### 2.内网穿透
+
+#### （1）简介
+
+内网穿透功能可以允许我们使用外网的网址来访问主机
+
+正常的外网需要访问我们的项目的流程是
+
+1、买服务器并且有公忘固定的`ip`
+
+2、买域名映射到服务器的`ip`
+
+3、域名需要进行备案和审核
+
+#### （2）使用场景
+
+1、开发测试（微信、支付宝）
+
+2、智慧互联
+
+3、远程控制
+
+4、私有云
+
+#### （3）传统访问
+
+![Snip20201127_2](./images/Snip20201127_2.png)
+
+#### （4）内网穿透
+
+![Snip20201127_3](./images/Snip20201127_3.png)
+
+#### （5）内网穿透常用的几个软件
+
+1、`natapp`
+
+2、续断
+
+3、花生壳
+
+### 3.支付宝Demo
+
+> 位置：https://opendocs.alipay.com/open/270/106291
+
+![Snip20201127_7](./images/Snip20201127_7.png)
+
+#### （1）配置类
+
+```java
+
+public class AlipayConfig {
+	
+//↓↓↓↓↓↓↓↓↓↓请在这里配置您的基本信息↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+
+	// 应用ID,您的APPID，收款账号既是您的APPID对应支付宝账号
+	public static String app_id = "2016110300789219";
+	
+	// 商户私钥，您的PKCS8格式RSA2私钥
+    public static String merchant_private_key = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCkG2EHkZBHU+5fYnEaGaxl/gOHgjrlwezA2qxwuNWOV/7IApPFhx/dAJqVrwo1f0suVLvV6Kt2Wn6fofuD2eMdFUf8E3UA5aQiS9AnitIh8XzgCF+HMza8iDJVq7XKKxjXdo+w9ZbcFQaXE+0eqc7YdPj5tv7zrmkimFiIjfifpDbbPyW05nAX4zRKCpggfGhfao7KrCXb8E2MuVXRbAhYtn8YQebzKkPyALBB9ONOkZVz/oGZ+1IrZ4NH0kWPiL6XTzmsiSM1/EOyVQmGFNzIcZOTLO9MnAB+9twaruDIlE45XNstO+UTUv0HzwChtFvdwuA7M6Reg2iDdH+XYy/XAgMBAAECggEAB2q9Xew0SyT99w2p8vYKFqn+WteF9fBn1OeNN6MC8+YCO+Px7dGHnSNz2SQKIBTavwNRYf+cEENSycA2b+UfIKdfk4MFnL7ERlCK3d6mVKZncHCwcJnd9XNqYvjZxINiIgrXv7W51cSVgaqC4wnlsV7ICfE9YKIXWlrsVW+lNwHQP9aL3hVYM7uJSFPgFBw6cmNwAIUE3BmXcdZkoxfbA93qfhPywFvk+4g0TpDrMsJ+2MXjBZc9X65HhLmPsJ+CTzU49TRFqEE9Z8BGWsk6gK0mX4+kcZIpxz8u91wrft9RlLMZ/6z0qHfWfWcLEwjdJmMt5TGgxGZhWiiv9srQ0QKBgQDvn6IhiySoopPSG/m+gzEnQYjhwlOecQNb+QMsauRdocWrRHZvy1y0wRAO/0XZmKUeKpH//9qDW9H98+BJyhxWDKRENKngx1YRhOfiYq0XQa/kocrZNJLnJTm3TRr5Cf7GGxpiH3WQVm7NnU8zzPkoXup9sbu2Crs6C6sw0xcS6wKBgQCvUojRSfnuxr96vL61UN1xSlDJ5z32d62Ld+VPeSflKfuDcyFNpLjfnm2ebZ52z4hqjwWAb+27XxWtK7/RwE6YtOKaro+r1DYKrjtcdYxOQ4upWZ0z5KUSUH6NKUQlBLF+yEqJaHEVhbUV5iG5oyB6mqWKbzxMiA7mr52Qf0KjxQKBgQCnpEzvnsMk36j/Q+czq+EFj8nN+AA8RuCMxee8eYQPJZB/Q8SAbgwLwU4Uz+70TuCl/C5spXkgkWqWerodpbKxWOLLfPSkd5D1bMA2F8b1EFWYZMDfuPJVmCuK2/zU4nNF8cxBfbToKDAY1ceFfA+MeOsgyOmEcHmQIH3CCMyJxQKBgGMi5l6B2CPemnOKusPIIA9pmFkyuuTdM3LDrxTLS3XX0XK47UH8PNWlvhJxpcNFArxOdyvzHphu4dD0BhlTBp5u2hvhTTg6XPyZHNPhXB79LsHp/GxVg8nhXk3v4aqVBtDL7OnZ9ufWnVjusm9IAJuTSrwGvjAAV3y2HQCSFVqJAoGAJBg9YSueFsnSUuJWnPo27poZO2ASZpDE+h2pPBfdYYI21FLWo9KbFSYDL7S716e14ouLxqMovz0TffpIEs/CAYSeHGVfPhAR0lIEAjPpPG2iNty/H5xsR+Bbjq/mhXvs//fHfKI0IlWEd8T6UKso4cMYpbC2unnipSXwVD0Cqww=";
+	
+	// 支付宝公钥,查看地址：https://openhome.alipay.com/platform/keyManage.htm 对应APPID下的支付宝公钥。
+    public static String alipay_public_key = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAheV4mvZGJBbyxOEAVaFO8cpceO3UquYeaUWALDMqV7qNInG0pf4YgEdt+/7EC4eP8OZu2YSEK36JQiL3VwohjaUBvSGN24/Xylr8H5L2K2mbd0M/ueo60tZasArnP3awTKunZvxWZIH65AVbw2YeDKu/35ZiKCSFT+3VmaqXtW+oeG1kew/Lzg+QrxikXVOkllNnbGkcncxeilEyO7Z51mk6AlRIpeTOS14NlYOT6MwVAwRB+7usfQ9ZAoDYWpcIl15EYaH+CIfJG2+ljMeNoHtbrQePxHVBr+6WbJROjdS4rdtAC7kO7Bhyt/OIAmq80x8wFkiuyD7MicDVcEK3hQIDAQAB";
+
+	// 服务器异步通知页面路径  需http://格式的完整路径，不能加?id=123这类自定义参数，必须外网可以正常访问
+//	public static String notify_url = "http://工程公网访问地址/alipay.trade.page.pay-JAVA-UTF-8/notify_url.jsp";
+//    这里使用了内网穿透
+    public static String notify_url = "http://udbt2dhxq9.52http.net/alipay.trade.page.pay-JAVA-UTF-8/notify_url.jsp";
+
+	// 页面跳转同步通知页面路径 需http://格式的完整路径，不能加?id=123这类自定义参数，必须外网可以正常访问
+	public static String return_url = "http://udbt2dhxq9.52http.net/alipay.trade.page.pay-JAVA-UTF-8/return_url.jsp";
+
+	// 签名方式
+	public static String sign_type = "RSA2";
+	
+	// 字符编码格式
+	public static String charset = "utf-8";
+	
+	// 支付宝网关（一定要将网关设置为 alipaydev，才能进行开发）
+	public static String gatewayUrl = "https://openapi.alipaydev.com/gateway.do";
+	
+	// 日志路径
+	public static String log_path = "/Volumes/extend/javaCode/F2FPay_Demo_Java/web-pay/";
+
+```
+
+#### （2）配置内网穿透
+
+![Snip20201127_8](./images/Snip20201127_8.png)
+
+#### （3）支付宝配置私钥
+
+![Snip20201127_10](./images/Snip20201127_10.png)
+
+### 4.实际的支付流程
+
+#### （1）启动内网穿透客户端
+
+```shell
+luo@luodeMacBook-Pro ~ % /Volumes/extend/temp/zhexi/csclient
+Please log on to Zhexi cloud WEB console to configure the tunnel. The tunnel is not configured by the client.
+luo@luodeMacBook-Pro ~ %
+```
+
+#### （2）配置内网穿透，直接代理到网关
+
+![Snip20201128_1](./images/Snip20201128_1.png)
+
+#### （3）前端支付宝链接跳转订单服务的Controller
+
+```html
+<li>
+  <a :href="'/mall/payment/getOrderInfoAndGoToAliPayment?orderSn='+(order?order.orderSn:'')" target="_black">
+    <img src="/static/order/cacheRegister/img/zhifubao.png" style="weight:auto;height:30px;" alt="">支付宝
+  </a>
+</li>
+```
+
+#### （4）订单服务的controller
+
+```java
+/**
+ * 因为支付宝返回的是一个html的<form></form>表单，所以直接告诉浏览器响应的数据类型（这样浏览器就不会报警告了）
+ * @param orderSn
+ * @return
+ * @throws InterruptedException
+ * @throws ExecutionException
+ * @throws AlipayApiException
+ */
+@ResponseBody
+@GetMapping(value = "/getOrderInfoAndGoToAliPayment",produces = "text/html")
+@ApiOperation("获取订单信息，并跳转支付宝的支付页面")
+public String getOrderInfoAndGoToAliPayment(@RequestParam("orderSn") String orderSn) throws InterruptedException, ExecutionException, AlipayApiException {
+
+    return aliPayService.getOrderInfoAndGoToAliPayment(orderSn);
+}
+```
+
+#### （5）根据订单号，封装数据，让浏览器跳转支付宝的支付页面
+
+```java
+ public String getOrderInfoAndGoToAliPayment(String orderSn) throws ExecutionException, InterruptedException, AlipayApiException {
+
+        OrderEntity orderEntity = orderService.getOrderByOrderSn(orderSn);
+
+        CompletableFuture<String> queryOrderNameTask = supplyAsync(() -> {
+            return orderItemService.getItemsNameByOrderSn(orderSn);
+        }, executorService);
+
+
+        //获得初始化的AlipayClient
+        AlipayClient alipayClient = new DefaultAlipayClient(
+                aliPayProperties.getGateway(),
+                aliPayProperties.getAppId(),
+                aliPayProperties.getPrivateKey(),
+                "json",
+                aliPayProperties.getCharset(),
+                aliPayProperties.getAlipayPublicKey(),
+                aliPayProperties.getSignType()
+        );
+
+        //实例化具体API对应的request类,类名称和接口名称对应,当前调用接口名称：alipay.trade.app.pay
+        //设置请求参数
+        AlipayTradePagePayRequest alipayRequest = new AlipayTradePagePayRequest();
+        alipayRequest.setReturnUrl("http://udbt2dhxq9.52http.net/mall/payment/afterAliPayment");
+        alipayRequest.setNotifyUrl("http://udbt2dhxq9.52http.net/alipay.trade.page.pay-JAVA-UTF-8/return_url.jsp");
+
+
+//SDK已经封装掉了公共参数，这里只需要传入业务参数。以下方法为sdk的model入参方式(model和biz_content同时存在的情况下取biz_content)。
+        AlipayTradeAppPayModel model = new AlipayTradeAppPayModel();
+
+
+        BigDecimal payAmount = orderEntity.getPayAmount();
+
+        // 设置金额为2位小数，超出两位小数就向上取整
+        BigDecimal scalePayAmount = payAmount.setScale(2, BigDecimal.ROUND_UP);
+
+        // 商户网站唯一订单号
+        model.setOutTradeNo(orderSn);
+        model.setTimeoutExpress("30m");
+        model.setTotalAmount(scalePayAmount.toString());
+
+        // 对一笔交易的具体描述信息。如果是多种商品，请将商品描述字符串累加传给body。
+        model.setBody("商品描述");
+
+        // 商品标题/交易标题/订单标题/订单关键字等。
+        // 注意：不可使用特殊字符，如 /，=，& 等。
+        model.setSubject(queryOrderNameTask.get());
+
+        // 销售产品码，商家和支付宝签约的产品码
+//        model.setProductCode("QUICK_MSECURITY_PAY"); // 默认的是错误的
+        model.setProductCode("FAST_INSTANT_TRADE_PAY");
+
+
+        /**
+         * 方式二设置参数
+         */
+/*        Map<String, String> map = new HashMap<>();
+
+        map.put("out_trade_no",orderSn);
+
+        map.put("total_amount",scalePayAmount.toString());
+
+        map.put("subject",queryOrderNameTask.get());
+
+        map.put("body","商品描述");
+
+        map.put("product_code","FAST_INSTANT_TRADE_PAY");
+
+        alipayRequest.setBizContent(JSON.toJSONString(map)); */
+
+        alipayRequest.setBizModel(model);
+
+        /**
+         * 只有是 pageExecute() 方法才能返回 <form></form> 表单，交由浏览器去执行
+         */
+        return alipayClient.pageExecute(alipayRequest).getBody();
+
+    }
+```
+
+#### （6）支付宝支付成功的回调controller
+
+```java
+    //TODO 支付宝跳回之后，被登陆拦截器拦截了
+    @GetMapping("/afterAliPayment")
+    @ApiOperation("支付宝支付完成之后的回调地址")
+    public String afterAliPayment( AliPayCallBackVo aliPayCallBackVo){
+
+        orderService.updatePaymentStatus(aliPayCallBackVo); // 更新订单状态为已支付（已做幂等性处理：只有订单状态是未支付状态，才能更新订单状态为待发货）
+
+        return "redirect:http://order.guli.com/order/index.html";
+    }
+```
+
+#### （7）支付成功异步通知
+
+> https://opendocs.alipay.com/open/270/105902
+>
+> 一定要使用公网`Dns/ip`，因为此时我们的应用相当于是服务器，支付宝的服务器相当于是客户端，要想通知到我们的服务器，只有使用公网`Dns/ip`才能找到路由
+
+![Snip20201128_2](./images/Snip20201128_2.png)
+
+### 5.支付宝使用最大努力通知
+
+#### （1）服务器异步通知页面特性
+
+* 必须保证服务器异步通知页面（notify_url）上无任何字符，如空格、HTML 标签、开发系统自带抛出的异常提示信息等；
+* 支付宝是用 POST 方式发送通知信息，因此该页面中获取参数的方式，如：`request.Form(“out_trade_no”)`、`$_POST[‘out_trade_no’]`；
+* 支付宝主动发起通知，该方式才会被启用；
+* 只有在支付宝的交易管理中存在该笔交易，且发生了交易状态的改变，支付宝才会通过该方式发起服务器通知（即时到账交易状态为“等待买家付款”的状态默认是不会发送通知的）；
+* 服务器间的交互，不像页面跳转同步通知可以在页面上显示出来，这种交互方式是不可见的；
+* 第一次交易状态改变（即时到账中此时交易状态是交易完成）时，不仅会返回同步处理结果，而且服务器异步通知页面也会收到支付宝发来的处理结果通知；
+* 程序执行完后必须打印输出“success”（不包含引号）。如果商户反馈给支付宝的字符不是 success 这7个字符，支付宝服务器会不断重发通知，直到超过24小时22分钟。一般情况下，25小时以内完成8次通知（通知的间隔频率一般是：4m,10m,10m,1h,2h,6h,15h）；
+* 程序执行完成后，该页面不能执行页面跳转。如果执行页面跳转，支付宝会收不到 success 字符，会被支付宝服务器判定为该页面程序运行出现异常，而重发处理结果通知；
+* cookies、session 等在此页面会失效，即无法获取这些数据；
+* 该方式的调试与运行必须在服务器上，即互联网上能访问；
+* 该方式的作用主要防止订单丢失，即页面跳转同步通知没有处理订单更新，它则去处理；
+* 当商户收到服务器异步通知并打印出 success 时，服务器异步通知参数 notify_id 才会失效。也就是说在支付宝发送同一条异步通知时（包含商户并未成功打印出 success 导致支付宝重发数次通知），服务器异步通知参数 notify_id 是不变的。
+
+#### （2）重新设置回调地址到nginx
+
+> 小技巧，查看nginx日志
+>
+> ```shell
+> luo@luodeMacBook-Pro logs % pwd
+> /Volumes/extend/docker_public_file_mapping/guli_shop/nginx/logs
+> luo@luodeMacBook-Pro logs % cat error.log| grep "/mall/payment/alipay"
+> ```
+
+1、配置`nginx`，直接监听`40/443`端口无效，还是要指定主机地址
+
+```shell
+luo@luodeMacBook-Pro conf.d % pwd
+/Volumes/extend/docker_public_file_mapping/guli_shop/nginx/conf/conf.d
+luo@luodeMacBook-Pro conf.d % cat guli-order-alipay.conf
+server {
+    listen       80;
+    # listen  [::]:80;
+    server_name  udbt2dhxq9.52http.net;
+
+
+
+    # 支付宝服务器通过内网穿透找到这里的时候，由于实际的请求头还是公网DNS，所以要重写host（请求头），方便网关识别，我这里支付宝在网关哪里有单独的路由，这里可以不写
+    # 注意，最顶都的 server_name 不能写，不然用的是公网DNS域名来访问，根本进不到这里
+    location ^~ /mall/payment/alipay/ {
+        proxy_pass   http://guli-mall;
+        proxy_set_header Host $host;    # 如果非要改的话，可以将 $host 改为 order.guli.com
+    }
+}
+```
+
+2、内网穿透到本地域名其实没什么意义，`nginx`真正接收到的还是公网的`DNS`（通过查看nginx日志即可看到），即`udbt2dhxq9.52http.net`
+
+![Snip20201128_3](./images/Snip20201128_3.png)
+
+
+
+### 6.收单
+
+1、订单在支付页，不支付一直刷新，订单过期了才支付，订单状态改为已支付，但是库存解锁了
+
+> 使用支付宝的自动收单功能解决，只要一段时间内不支付，就不能支付了
+>
+> ```java
+>         AlipayTradeAppPayModel model = new AlipayTradeAppPayModel();
+>         /**
+>          * 使用支付宝的自动收单功能
+>          * 必须要设置定时关单，不然用户停留在支付宝的支付页面30分钟以上，我们已经将超时未支付的订单给取消了，
+>          * 此时及时支付宝支付成功，也不能修改订单状态了
+>          * */
+>         int timeout = OrderConstant.ORDER_PAYMENT_TIME / 1000 / 60;
+> 
+>         model.setTimeoutExpress(timeout + "m");
+> ```
+>
+> 
+
+2、由于时延等问题，订单解锁完成，正在解锁库存的时候，异步通知才到
+
+> 解决：订单解锁完成时，手动调用收单
+
+3、网络阻塞问题，订单支付成功的异步通知一直不到达
+
+> 查询订单列表时，`ajax`获取当前未支付的订单状态，查询订单状态时，再获取一下支付宝此订单状态
+
+4、其他各种问题
+
+> 每天晚上闲时下载支付宝对账单，进行对账
+
+## 十三、秒杀
+
+### 1.秒杀业务
+
+秒杀具有瞬间高并发的特点，针对这一特点，必须要做**`限流`+`异步`+`缓存（页面静态化）`+`独立部署`**
+
+限流方式
+
+（1）前端限流，一些高并发的网站直接在前端页面开始限流，例如：小米的验证码设计
+
+（2）`nginx`限流，直接负载部分的请求到错误的静态页面：**`令牌算法`，`漏斗算法`**
+
+（3）网关限流，限流的过滤器
+
+（4）代码中使用分布式信号量
+
+（5）`RabbitMQ`限流：能者多劳：`channel.basicQos(1)`，保证发挥所有服务器的性能
+
+### 2.秒杀流程
+
+![Snip20201202_2](./images/Snip20201202_2.png)
+
+![Snip20201202_4](./images/Snip20201202_4.png)
+
+2、可供选择的流程2（速递极快）
+
+> 缺点：如果订单服务宕机或者消费速度过慢，后续流程都卡死
+
+![Snip20201202_1](./images/Snip20201202_1.png)
+
+### 3.定时任务
+
+> 语法： 秒  分  时  日  月  周  年  （`spring`不支持年）
+>
+> 参考`谷粒学院.md`的第`26`小节
+>
+> cron表达式在线生成器地址： https://cron.qqe2.com/
+>
+> 在第几周的位置，`1-7`代表周一到周日：也可以写 MON（星期几的英文字母前三个简写）
+
+![Snip20201130_3](./images/Snip20201130_3.png) 
+
+特殊字符：
+
+`,`  枚举`cron = "7,9,23 * * * * ?"`：任意时刻的`7,9,23`秒时启动这个应用
+
+`-` 范围`cron = "7-20 * * * * ?"`：任意时刻的`7-20`秒之间，每秒启动一次
+
+`*`任意：指定位置的任意时刻都可以
+
+`/`步长`cron = 7/5 * * * * ?`：第七秒启动，每5秒一次
+
+​			`cron = */5 * * * * ?`：任意秒启动，每5秒一次
+
+`?`（出现在日和周几的位置）：为了防止日和周冲突，在周和日上如果要写通配符，则需要使用`?`，**日和周的位置不能同时写`*`，其中必有一个是`?`**
+
+​			`cron = * * * 1 * Tue`：每月的`1`号，而且必须是周二然后启动这个任务，但是不一定能成立，所以周的位置要改为`?`进行通配符，最终只能是`cron = * * * 1 * ?`
+
+`L`（出现在日和周的位置），代表`last`：最后一个
+
+​			`cron = * * * ? * 3L`：每个月的最后一个周二（3代表周二，因为老外的周天是1）
+
+`W`（wrok day：工作日）`cron = * * * W * ?`：每个月的工作日触发
+
+​			`cron = * * * LW * ?`：每个月的最后一个工作日触发						
+
+`#`第几个
+
+​			`cron = * * * ? * 5#2`，每个月第二个周四（5代表周四）
+
+（1）表达式示例
+
+![定时任务表示例](./images/定时任务表示例.png)
+
+### 4.spring boot 开启定时任务
+
+> 其自动配置类`TaskSchedulingAutoConfiguration`
+
+```java
+@EnableScheduling // 开启定时任务
+@Component
+@Slf4j
+public class Hello {
+
+    /**
+     * 周的位置，是几就是星期几（星期一就是1）
+     * 定时任务不应该阻塞，当前定时任务被阻塞，则下一个定时任务也会被当前任务所阻塞
+     * 解决方法：
+     * 1、开线程去执行任务，可以让业务以异步的方式，自己提交到线程池
+     * 2、使用定时任务线程池，设置 TaskSchedulingAutoConfiguration 的 TaskSchedulingProperties 来进行配置线程池的大小（不好用，有bug）
+     * 3、让定时任务异步执行
+     */
+    @Scheduled(cron = "* * * ? * 1")
+    public void sayHello() {
+
+        CompletableFuture.runAsync(() -> {
+            // 要执行的任务
+            try {
+                TimeUnit.SECONDS.sleep(5);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        });
+        log.info("你好（使用异步任务的方式）");
+    }
+}
+```
+
+配置`yaml`
+
+```yml
+spring:
+  task:
+    scheduling:
+      pool:
+      	size: 5  # 配置定时任务线程池的大小
+```
+
+
+
+### 5.spring boot 开启异步任务
+
+> 解决：使用异步+定时任务来完成定时任务不阻塞的功能
+>
+> 所有方法都可以标注`@Async`注解，使其异步执行，`spring boot `会将该任务交由线程池去执行
+>
+> 其自动配置类`TaskExecutionAutoConfiguration`，自动配置的属性在`TaskExecutionProperties`
+
+```java
+@EnableAsync // 开启异步任务
+@Component
+@Slf4j
+public class Hello {
+  
+     @Async
+    @Scheduled(cron = "* * * ? * 1")
+    public void sayNihao() {
+        // 要执行的任务
+        try {
+            TimeUnit.SECONDS.sleep(5);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        log.info("你好（使用 TaskScheduling 的方式）");
+    }
+}
+```
+
+`yaml`配置
+
+```yml
+spring:
+  task:    
+    execution:  # 配置异步任务线程池
+      pool:
+        core-size: 4
+        max-size: 50
+```
+
+### 6.秒杀（高并发）系统关注的问题
+
+（1）服务单一职责+独立部署
+
+​			秒杀服务器即使自己扛不住压力，挂掉。不要影响别人
+
+（2）秒杀链接加密
+
+​		防止恶意攻击，模拟秒杀请求，`1000次/s`攻击
+
+（3）库存预热+快速扣减
+
+​		秒杀读多写少，无需每次实时校验库存，我们库存预热，放到redis中，信号量控制进来的秒杀请求
+
+（4）动静分离
+
+​		`nginx`做好动静分离，保证秒杀和商品详情页的动态请求打到后端服务集群，使用`CDN`网络，分担本集群压力	
+
+（5）恶意请求拦截
+
+​		识别非法攻击请求，并进行拦截，最好在**网关**进行拦截
+
+（6）流量错峰
+
+​		使用各种手段，将流量分担到更大的宽度的时间点，，比如验证码，加入购物车
+
+（7）限流、熔断、降级
+
+​		前端限流+后端限流	
+
+​		限制次数、限制总量、快速失败、降级运行、熔断隔离与防止雪崩
+
+（8）队列削峰
+
+​		`1`万的商品，每秒`1000`件秒杀，双`11`所有秒杀成功的请求，进入队列，慢慢创建订单，扣减库存即可
+
+## 十四、熔断、限流、降级
+
+### 1.docker运行sentinel
+
+```shell
+docker run --name sentinel  -d -p 8858:8858 -d  bladex/sentinel-dashboard
+```
+
+### 2.启用实时监控
+
+> 对于`sentinel 1.8`，导入坐标即可使用
+>
+> ```xml
+>         <!--        Sentinel 提供对所有资源的实时监控。如果需要实时监控，客户端需引入以下依赖（以 Maven 为例）：-->
+>         <dependency>
+>             <groupId>com.alibaba.csp</groupId>
+>             <artifactId>sentinel-transport-simple-http</artifactId>
+>         </dependency>
+> ```
+>
+> 
+
+### 3.调用方的熔断保护
+
+（1）开启熔断
+
+```yml
+# 开启 sentinel 对 feign 的熔断保护
+feign:
+  sentinel:
+    enabled: true
+```
+
+（2）在`feign`接口中指定降级的类
+
+```java
+/**
+ * 设置调用方的熔断保护
+ */
+@FeignClient(name = "secKill-service",fallback = SecKillFeignFallBack.class )
+public interface SecKillFeignClient {
+
+    @GetMapping("/seckill/front/checkWhetherTheProductParticipatesInTheSpike/{spuId}")
+    @ApiOperation("根据spuId查询商品是否参加秒杀")
+    List<SecKillSessionAndRelation> checkWhetherTheProductParticipatesInTheSpike(@PathVariable("spuId") String spuId);
+}
+```
+
+（3）实现`feign`接口，降级方法，**必须放入容器**
+
+```java
+@Component
+public class SecKillFeignFallBack implements SecKillFeignClient {
+    @Override
+    public List<SecKillSessionAndRelation> checkWhetherTheProductParticipatesInTheSpike(String spuId) {
+
+
+
+        return null;
+    }
+}
+```
+
+### 4.用sentinel保护feign远程调用：熔断
+
+（1）调用方的熔断保护
+
+（2）调用方手动指定远程服务的降级策略。远程服务被降级处理。触发我们的熔断回调方法
+
+（3）超大流量的时候，必须牺牲一些远程服务，在服务的提供方（远程服务）指定降级策略。提供方是在运行，但是不运行自己的业务逻辑，返回的是默认的熔断数据（降级后的数据）
+
+### 5.自定义受保护的资源
+
+#### （1）自定义受保护的资源代码块
+
+```java
+List<SecKillRelationAndSpu> secKillRelationAndSpus = null;
+// 1.5.0 版本开始可以利用 try-with-resources 特性（使用有限制）
+// 资源名可使用任意有业务语义的字符串，比如方法名、接口名或其它可唯一标识的字符串。
+// 自定义自原名进行限流
+try (Entry entry = SphU.entry("checkWhetherTheProductParticipatesInTheSpike")) {
+    // 被保护的业务逻辑
+    // do something here...
+
+    secKillRelationAndSpus = this.checkWhetherTheProductParticipatesInTheSpike(spuId);
+} catch (BlockException ex) {
+    // 资源访问阻止，被限流或被降级
+    // 在此处进行相应的处理操作
+    log.error("流量过大，资源被限流：{}",ex.getMessage());
+}
+
+
+if (CollectionUtils.isEmpty(secKillRelationAndSpus)) {
+    return null;
+}
+```
+
+![Snip20201207_1](./images/Snip20201207_1.png)
+
+#### （2）使用@SentinelResource限流
+
+1、被限流的方法
+
+```java
+    @SentinelResource(value = "getAvailableSecKillSpuResource",
+            blockHandlerClass = SecKillServiceBlockHandler.class,
+            blockHandler = "getAvailableSecKillSpuBlockHandler")
+    @Override
+    public List<SecKillRelationAndSpu> getAvailableSecKillSpu(){
+      
+    }
+```
+
+2、限流处理器
+
+```java
+@Slf4j
+public class SecKillServiceBlockHandler {
+
+    /**
+     * 如果 blockHandler 和 @SentinelResource 注解标注的方法没有在同一个类中（制定了 blockHandlerClass）
+     * 则 blockHandler 必须是一个 static 方法
+     *
+     * @param ex   Block 异常处理函数，参数最后多一个 BlockException，其余与原函数一致.
+     * @return
+     */
+    public static List<SecKillRelationAndSpu> getAvailableSecKillSpuBlockHandler(BlockException ex) {
+        ex.printStackTrace();
+        log.error("流量过大，进行限流😭😭");
+
+        return null;
+    }
+}
+```
+
+
+
+### 6.网关限流
+
+> 要重启`sentinel`才能生效
+
+（1）网管添加特殊限流插件
+
+```xml
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-starter-alibaba-sentinel</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.cloud</groupId>
+            <artifactId>spring-cloud-alibaba-sentinel-gateway</artifactId>
+        </dependency>
+```
+
+## 十五、Sleuth+Zipkin服务链路追踪
+
+### 1.span（跨度）
+
+基本工作单元，发送一个远程调度任务就会产生一个`span`，`span`是一个`64`位`ID`唯一标示的，`Trace`是用另一个`64`位`ID`唯一标示的，`span`还有其他数据信息，比如摘要、时间戳事件、`span`的`id`、以及进度`id`
+
+### 2.Trace（跟踪）
+
+一系列`span`组成的一个树状结构。请求一个微服务系统的`Api`接口，这个`api`接口，需要调用多个微服务，调用每个微服务都会产生一个新的`span`，所有由这个请求产生的`span`组成了这个`Trace`
+
+### 3.Annotation（标注）
+
+用来及时记录一个事件的，一些核心注解用来定义一个请求的开始和结束，这些注解包括以下
+
+* `cs - Client Sent`客户端发送一个请求，这个注解描述了这个`span`的开始
+* `sr - Server Received` 服务端获得请求并准备开始处理它，如果将`sr - cs`即可得到网络传输的时间
+* `ss - Server Sent` （服务端发送响应）该注解表明请求处理的完成（当请求返回客户端），如果`ss - sr`得到的时间戳就是服务器处理请求的处理时间
+* `cr - Client Received` （客户端接收响应）此时`span`的结束，如果`cr - cs`得到的时间戳可以得到整个请求所消耗的时间
+
+### 4.流程图
+
+![sleuth](./images/sleuth.png)
+
+调用的父子关系
+
+![42B8DFC3-B6CA-4EA4-BF82-6D0558A5B923](./images/42B8DFC3-B6CA-4EA4-BF82-6D0558A5B923.png)
+
+### 5.整合运行zipkin
+
+```java
+docker run -d -p 9411:9411 --name zipkin openzipkin/zipkin
+```
+
+微服务导入`zipkin`客户端
+
+> 注意`spring-cloud-starter-sleuth`与`spring-boot-starter-data-redis`中的`lettuce-core`冲突，
+>
+> 只能将`lettuce`替换为`jedis`，但是不能使用`redis`的`lua`脚本。
+
+```xml
+<!--        链路追踪-->
+        <!--<dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-sleuth</artifactId>
+        </dependency>-->
+
+<!--        汇报链路信息（包含sleuth启动器）
+
+                会与 redis的驱动程序 lettuce 冲突，把 spring-boot-starter-data-redis 的 lettuce 排除，替换为 jedis即可
+                    但是注意 jedis 可能执行不了 lua脚本
+                    
+                    
+[Sentinel Starter] register SentinelWebInterceptor with urlPatterns: [/**].
+2020-12-08 21:10:51.912  INFO [ware-service,,,] 1643  [           main] io.lettuce.core.EpollProvider            : Starting without optional epoll library
+2020-12-08 21:10:51.913  INFO [ware-service,,,] 1643  [           main] io.lettuce.core.KqueueProvider           : Starting without optional kqueue library
+
+-->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-zipkin</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>io.lettuce</groupId>
+                    <artifactId>lettuce-core</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>redis.clients</groupId>
+            <artifactId>jedis</artifactId>
+        </dependency>
+```
+
+微服务配置
+
+```yml
+spring:
+  zipkin:
+    base-url: http://localhost:9411 # zipkin 服务器地址
+    # 关闭服务发现，否则 spring cloud 会把 zipkin 的 url 当作服务器名称
+    discovery-client-enabled: false
+    sender:
+      type: web # 设置使用 http 的方式传输数据
+  sleuth:
+    sampler:
+      probability: 1  # 设置抽样采集率为 100%，默认 0.1，即 10%
+```
+
+### 6.zipkin持久化
+
+`zipkin`支持将数据存储至：
+
+* 内存（默认）
+* MySql
+* ElasticSearch
+* Cassandra
+
+`zipkin`数据持久化的相关官方文档如下
+
+`zipkin`默认是将监控数据存储在内存的，内存显然是不适合用于生产的，这一点开始也说了。而使用`mysql`的话，当数据量大时，查询较为缓慢，也不建议使用。`twitter`官方使用的是`Cassandra`作为`zipkin`的存储数据库，但国内大规模用`Cassandra`的公司较少，而且`Cassandra`相关文档也不多
+
+综上，故使用`ElasticSearch`是个比较好的选择，关于使用`ElasticSearch`作为`zipkin`的存储数据库官方支持文档如下
+
+> `elastic search`监听的端口
+>
+> 9300端口是使用tcp客户端连接使用的端口
+>
+> 9200端口是通过http协议连接es使用的端口；
+>
+> 注意是`openzipkin/zipkin-dependencies`而不是`openzipkin/zipkin`，
+>
+> `openzipkin/zipkin-dependencies`整合了`elastic search`持久化，
+>
+> 类似的还有`openzipkin/zipkin-mysql`进行`mysql`持久化等
+
+```shell
+docker run -d -p 9411:9411 --env STORAGE_TYPE=elasticsearch --env ES_HOSTS=192.168.2.1:9200 --name zipkin openzipkin/zipkin-dependencies
+```
+
+| 环境变量                |                                                              |
+| ----------------------- | ------------------------------------------------------------ |
+| STORAGE_TYPE            | 指定存储类型，选项可为`elasticsearch、mysql、cassandra`等    |
+| ES_HOSTS                | `elasticsearch`地址，多个地址使用`,`分隔开，默认是`localhost:9200` |
+| ES_PIPELINE             | 指定`span`被索引之前的`pipeline`（`pipeline`是`elasticsearch`的概念） |
+| ES_TIMEOUT              | 链接`es`的超时时间，单位是毫秒，默认`10000`（`10`秒）        |
+| ES_INDEX                | `zipkin`所使用的索引（`zipkin`会每天建索引）前缀，默认是`zipkin` |
+| ES_DATE_SEPATATOR       | `zipkin`建立索引的日期分隔符，默认是`-`                      |
+| ES_INDEX_SHARDS         | `shard`（`shard`是`es`中的概念）个数，默认`5`                |
+| ES_INDEX_REPLICAS       | 副本（`replica`是`es`的概念）个数，默认`1`                   |
+| ES_USERNAME/ES_PASSWORD | `es`的账号密码                                               |
+| ES_HTTP_LOGGING         | 控制`es api`的日志级别，可选项为`BASIC、HEADERS、BODY`       |
+
+
+
