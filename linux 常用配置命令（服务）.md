@@ -1341,6 +1341,41 @@ primary key [-pid]:
 
 将其上传至`win7`就能进行相应的安装了
 
+
+
+
+
+### 13、安装jdk
+
+下载成功之后，点击按照提示步骤安装即可，默认安装路径为：`/Library/Java/JavaVirtualMachines`
+
+
+
+```shell
+# java 环境变量
+JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk1.8.0_341.jdk/Contents/Home
+export JAVA_HOME
+export CLASSPATH="$JAVA_HOME/lib/tools.jar:$JAVA_HOME/lib/dt.jar"
+export PATH="$PATH:$JAVA_HOME/bin"
+
+```
+
+#### （1）使用终端卸载 Oracle Java
+
+> 参考：https://www.java.com/zh-CN/download/help/mac_uninstall_java.html
+>
+> 请勿尝试通过从 `/usr/bin` 删除 Java 工具来卸载 Java。此目录是系统软件的一部分，下次对操作系统执行更新时，Apple 会重置所有更改。
+
+```shell
+sudo rm -fr /Library/Internet\ Plug-Ins/JavaAppletPlugin.plugin
+sudo rm -fr /Library/PreferencesPanes/JavaControlPanel.prefPane
+sudo rm -fr ~/Library/Application\ Support/Oracle/Java
+```
+
+#### （2）下载visualvm
+
+> 下载地址：https://visualvm.github.io/download.html
+
 ## 五、安卓虚拟机
 
 > 下载地址：https://www.android-x86.org/
