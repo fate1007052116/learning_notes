@@ -728,6 +728,30 @@ server {
 }
 ```
 
+### 34、查看占用指定端口的进程
+
+> 注意：需要root权限才能查看进程pid
+
+```shell
+root@VM-4-2-ubuntu:/home/luo# netstat -anple | grep 7000
+tcp6       0      0 :::7000                 :::*                    LISTEN      0          59969      7640/frps
+
+root@VM-4-2-ubuntu:/home/luo# lsof -i:7000
+COMMAND  PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+frps    7640 root    6u  IPv6  59969      0t0  TCP *:afs3-fileserver (LISTEN)
+```
+
+### 35、将内存当作硬盘使用
+
+> 注意：mysql存在大量随机读写，即使是将数据库装在内存中，提升也不明显
+
+```shell
+sudo mkdir /mnt/ram
+sudo mount -t ramfs -o size=4G ramfs /mnt/ram
+# 将 mysql 数据库安装在内存中
+docker run --name mysql -v /mnt/ram/mysql_data:/var/lib/mysql -e MYSQL_ROOT_PASSWORD=1234 -p 3306:3306  -d mysql:5.7
+```
+
 
 
 ## 二、配置网卡
