@@ -713,7 +713,7 @@ cat /etc/nginx/conf.d/default.conf
 server {
     listen       80;
     listen  [::]:80;
-    server_name  localhost;
+    #server_name  localhost;
     
     charset utf-8;# 注意编码,windows 平台，编码应该为gbk
 
